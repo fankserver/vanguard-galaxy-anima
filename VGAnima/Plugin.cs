@@ -15,6 +15,14 @@ public class Plugin : BaseUnityPlugin
     internal static Plugin Instance { get; private set; } = null!;
     internal static ManualLogSource Log { get; private set; } = null!;
 
+    // These are wired in Task 13 (Plugin.Awake composition); declared here
+    // so patch classes referencing them compile. All null until Awake runs.
+    internal VGAnima.Config.AnimaConfig Cfg { get; set; } = null!;
+    internal VGAnima.Missions.IMissionSource MissionSource { get; set; } = null!;
+    internal VGAnima.Pitch.IPitchProvider PitchProvider { get; set; } = null!;
+    internal VGAnima.Tts.VgttsBridge Vgtts { get; set; } = null!;
+    internal VGAnima.Cache.ConversionRegistry<Source.Galaxy.POI.Station.BarPatron, VGAnima.Cache.ConversionRecord> Registry { get; set; } = null!;
+
     private Harmony _harmony = null!;
 
     private void Awake()
