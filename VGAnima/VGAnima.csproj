@@ -32,4 +32,8 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="VGAnima.Tests" />
+  </ItemGroup>
+
 </Project>
