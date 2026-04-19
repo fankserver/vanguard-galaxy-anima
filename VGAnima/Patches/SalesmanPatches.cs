@@ -20,7 +20,7 @@ namespace VGAnima.Patches;
 internal static class SalesmanPatches
 {
     [HarmonyPrefix]
-    [HarmonyPatch(nameof(BarPatron.InteractWithPatron))]
+    [HarmonyPatch(nameof(Salesman.InteractWithPatron))]
     private static bool InteractWithPatron_Prefix(Salesman __instance)
     {
         try
