@@ -1,6 +1,14 @@
+using System.Linq;
 using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
+using Source.Galaxy.POI.Station;
+using VGAnima.Cache;
+using VGAnima.Config;
+using VGAnima.Missions;
+using VGAnima.Patches;
+using VGAnima.Pitch;
+using VGAnima.Tts;
 
 namespace VGAnima;
 
@@ -15,13 +23,11 @@ public class Plugin : BaseUnityPlugin
     internal static Plugin Instance { get; private set; } = null!;
     internal static ManualLogSource Log { get; private set; } = null!;
 
-    // These are wired in Task 13 (Plugin.Awake composition); declared here
-    // so patch classes referencing them compile. All null until Awake runs.
-    internal VGAnima.Config.AnimaConfig Cfg { get; set; } = null!;
-    internal VGAnima.Missions.IMissionSource MissionSource { get; set; } = null!;
-    internal VGAnima.Pitch.IPitchProvider PitchProvider { get; set; } = null!;
-    internal VGAnima.Tts.VgttsBridge Vgtts { get; set; } = null!;
-    internal VGAnima.Cache.ConversionRegistry<Source.Galaxy.POI.Station.BarPatron, VGAnima.Cache.ConversionRecord> Registry { get; set; } = null!;
+    internal AnimaConfig Cfg { get; private set; } = null!;
+    internal IMissionSource MissionSource { get; private set; } = null!;
+    internal IPitchProvider PitchProvider { get; private set; } = null!;
+    internal VgttsBridge Vgtts { get; private set; } = null!;
+    internal ConversionRegistry<BarPatron, ConversionRecord> Registry { get; private set; } = null!;
 
     private Harmony _harmony = null!;
 
@@ -29,7 +35,30 @@ public class Plugin : BaseUnityPlugin
     {
         Instance = this;
         Log = Logger;
-        Log.LogInfo($"{PluginName} v{PluginVersion} loaded (stub)");
+
+        Cfg = new AnimaConfig(Config);
+
+        var missionTypes = Cfg.MissionTypes.Value
+            .Split(',')
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToArray();
+        MissionSource = new VanillaMissionSource(missionTypes);
+
+        PitchProvider = new StaticPitchProvider();  // v0.2 swaps to LlmPitchProvider
+        Vgtts = new VgttsBridge();
+        Registry = new ConversionRegistry<BarPatron, ConversionRecord>();
+
+        Log.LogInfo($"[vganima] VGTTS detected: {(Vgtts.IsAvailable ? "yes" : "no")}");
+        Log.LogInfo($"[vganima] MissionTypes: [{string.Join(", ", missionTypes)}]  " +
+                    $"Chance: {Cfg.MissionChance.Value}  Backend: {Cfg.LlmBackend.Value}");
+
+        _harmony = new Harmony(PluginGuid);
+        _harmony.PatchAll(typeof(BarPatronPatches));
+        _harmony.PatchAll(typeof(SalesmanPatches));
+        _harmony.PatchAll(typeof(BarRefreshPatches));
+
+        Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} patches)");
     }
 
     private void OnDestroy()
