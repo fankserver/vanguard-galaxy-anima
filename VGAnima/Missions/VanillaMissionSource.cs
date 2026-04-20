@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using HarmonyLib;
 using Source.MissionSystem;
 
 namespace VGAnima.Missions;
@@ -40,7 +41,11 @@ internal sealed class VanillaMissionSource : IMissionSource
             return null;
         }
 
-        var rng = station.missionBoard.GetSeededRandom();
+        // MissionBoard.GetSeededRandom is `private` at runtime (the publicized
+        // stub lies). Invoke via Traverse to bypass access checks.
+        var rng = Traverse.Create(station.missionBoard)
+            .Method("GetSeededRandom")
+            .GetValue<SeededRandom>();
 
         // Instance GenerateMission signature (4 params, verified via IL dump):
         //   Mission GenerateMission(MapPointOfInterest poi, MissionDifficulty difficulty,
