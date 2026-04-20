@@ -165,10 +165,11 @@ internal static class BarRefreshPatches
             Plugin.Log.LogWarning($"[vganima] No patronSprites for isMale={newPatron.isMale}; aborting");
             return;
         }
-        var usedByGender = new HashSet<int>(bar.availablePatrons
-            .Where(p => p.isMale == newPatron.isMale)
-            .Select(p => p.seat));
-        var freeSeats = genderSeats.Where(s => !usedByGender.Contains(s)).ToList();
+        // Seat maps to a physical stool position in the bar scene. Two patrons
+        // at the same seat stack on top of each other regardless of gender, so
+        // exclude seats already taken by ANY patron, not just same-gender ones.
+        var usedByAny = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
+        var freeSeats = genderSeats.Where(s => !usedByAny.Contains(s)).ToList();
         newPatron.seat = freeSeats.Count > 0 ? freeSeats[0] : genderSeats[0];
 
         // Diagnostic: dump the seat/sprite state so we can verify the choice
