@@ -57,7 +57,9 @@ internal static class BarPatronPatches
             return;
         }
 
-        var station = salesman.spaceStation;
+        // BarPatron.spaceStation is `protected` at runtime — the publicized stub
+        // lies. Use Traverse to bypass access checks (Harmony reflection).
+        var station = Traverse.Create(salesman).Field<SpaceStation>("spaceStation").Value;
         if (station == null) return;
 
         // 1. Generate the real game mission.
