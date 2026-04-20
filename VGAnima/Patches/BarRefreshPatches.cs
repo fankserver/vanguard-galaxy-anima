@@ -106,6 +106,27 @@ internal static class BarRefreshPatches
         foreach (var p in bar.availablePatrons)
             if (plugin.Registry.TryGet(p, out _)) return;
 
+        // Detect duplicate-seat saved state from older plugin versions that
+        // assigned conflicting seats (pre-fix brokers saved into the game's
+        // savegame). The game saves `Bar.availablePatrons`, so stale brokers
+        // persist across reloads. We can't safely auto-remove them (risk of
+        // deleting legitimate same-seat vanilla patrons), but log a warning
+        // so the user knows to advance in-game time for a day-refresh which
+        // clears availablePatrons and lets the current fix take effect.
+        var dupSeats = bar.availablePatrons.GroupBy(p => p.seat)
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        var dupNames = bar.availablePatrons.GroupBy(p => p.name)
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        if (dupSeats.Count > 0 || dupNames.Count > 0)
+        {
+            Plugin.Log.LogWarning(
+                $"[vganima] Bar at '{station.name}' has stale duplicates: " +
+                $"names=[{string.Join(",", dupNames)}] seats=[{string.Join(",", dupSeats)}]. " +
+                $"Likely a broker saved by an older plugin version. " +
+                $"Advance in-game time (day-refresh) to clear the bar and let the current fix apply.");
+            return;  // Don't pile on another broker; wait for cleanup.
+        }
+
         // Bar.spaceStation is `private` at runtime (publicizer lies) — Traverse it.
         var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
         if (station == null) return;
@@ -150,6 +171,9 @@ internal static class BarRefreshPatches
         // Override the random vanilla name so our broker is visually distinct
         // from any coincidental salesman the seed rolls. _name is public.
         Traverse.Create(newPatron).Field<string>("_name").Value = "The Mission Broker";
+        // Tag the description so saved brokers are identifiable on reload —
+        // useful for future stale-state detection / auto-cleanup.
+        newPatron.description = "VGAnimaBroker";
 
         // Pick a seatIndex from patronSprites matching the patron's gender. Prefer
         // one not already used by an existing patron of the same gender (the UI
