@@ -22,6 +22,18 @@
     <!-- PatronContext surfaces SpaceStation (Unity MonoBehaviour subtype), so
          the CLR needs UnityEngine.* reference assemblies to JIT its ctor. -->
     <PackageReference Include="UnityEngine.Modules" Version="6000.2.6" />
+    <!-- VGAnima marks BepInEx.Core and HarmonyX IncludeAssets="compile" so their
+         runtime assemblies don't ship in the deployed plugin — the game provides
+         them. xUnit DOES need them at runtime (AnimaConfigTests creates
+         ConfigFile; VgttsBridgeTests exercises BepInEx.Logging paths), so pull
+         them in directly here to bypass the transitive-assets filter.
+         BepInEx.Core is a meta-package; BepInEx.dll itself ships in BaseLib. -->
+    <PackageReference Include="BepInEx.BaseLib" Version="5.*" />
+    <PackageReference Include="HarmonyX" Version="2.10.*" />
+    <!-- Newtonsoft.Json is also compile-only in VGAnima (game provides it), but
+         xUnit needs it at runtime to exercise LlmRequestBodyTests + the parsing
+         path in ResponseValidatorTests. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>

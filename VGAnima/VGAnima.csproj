@@ -12,14 +12,24 @@
       https://api.nuget.org/v3/index.json;
       https://nuget.bepinex.dev/v3/index.json;
     </RestoreAdditionalProjectSources>
+    <!-- BepInEx / HarmonyX / UnityEngine.Modules / Newtonsoft.Json are all marked
+         IncludeAssets="compile" below so they stay out of bin — the game ships its
+         own copies at runtime. We originally tried System.Text.Json here for the
+         LLM JSON work, but Mono's TypeLoader VTable-faulted on Utf8JsonWriter
+         (Unity 6000.2 Mono profile doesn't stomach STJ 8.x + its shipped
+         System.Memory/Buffers variants). Switched to Newtonsoft.Json which Unity
+         provides natively — one less copy-local concern, no version-conflict risk.
+         CopyLocalLockFileAssemblies stays on so if a future dep genuinely needs
+         to ship, bin/ will pick it up automatically. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
-    <PackageReference Include="BepInEx.Core" Version="5.*" />
-    <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+    <PackageReference Include="BepInEx.Core" Version="5.*" IncludeAssets="compile" />
+    <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" IncludeAssets="compile" />
     <PackageReference Include="UnityEngine.Modules" Version="6000.2.6" IncludeAssets="compile" />
-    <PackageReference Include="HarmonyX" Version="2.10.*" />
+    <PackageReference Include="HarmonyX" Version="2.10.*" IncludeAssets="compile" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" IncludeAssets="compile" />
   </ItemGroup>
 

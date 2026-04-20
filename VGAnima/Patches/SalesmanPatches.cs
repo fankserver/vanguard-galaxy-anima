@@ -1,21 +1,32 @@
 using System;
 using System.Collections.Generic;
 using Behaviour.Dialogues;
+using Behaviour.UI.Spacestation.Bar;
 using Behaviour.Util;
 using HarmonyLib;
 using Source.Dialogues;
 using Source.Galaxy.POI.Station.Patrons;
+using Source.MissionSystem;
+using Source.Player;
 using VGAnima.Cache;
 using VGAnima.Pitch;
+using UObject = UnityEngine.Object;
 
 namespace VGAnima.Patches;
 
 /// <summary>
-/// Intercepts <see cref="Salesman.InteractWithPatron"/> for brokers in the
-/// registry. Rebuilds dialogue lines on every click from
-/// <see cref="BrokerStateDetector"/> so the broker's speech tracks the
-/// player's progress on the pitched mission. The onComplete handler is
-/// state-specific — only the Initial state posts the mission to the board.
+/// Intercepts <see cref="Salesman.InteractWithPatron"/> for Salesmen in our
+/// registry (i.e. the converted brokers). Dispatches on <see cref="BrokerState"/>
+/// derived from the broker's assigned storyId, builds a dialogue list with
+/// state-specific lines + completion triggers, and hands it to vanilla's
+/// <c>DialogueManager.StartDialogue</c>.
+///
+/// Lifecycle wiring per state:
+///   Initial      → onComplete: GamePlayer.AddMissionWithLog(storyId)
+///   InProgress   → onComplete: (none)
+///   ReadyToClaim → WithTrigger on second-to-last line: CompleteMission(mission);
+///                  onComplete: Depart(salesman, record)
+///   Done         → onComplete: Depart(salesman, record)
 /// </summary>
 [HarmonyPatch(typeof(Salesman))]
 internal static class SalesmanPatches
@@ -29,33 +40,72 @@ internal static class SalesmanPatches
             if (Plugin.Instance is not { } plugin) return true;
             if (!plugin.Registry.TryGet(__instance, out var record)) return true;
 
-            var state = BrokerStateDetector.Detect(record);
+            var state = BrokerStateDetector.Detect(record.StoryId, plugin.PlayerView);
+
+            // For ReadyToClaim we need the live Mission instance to pass to
+            // CompleteMission. Fetch it here so the closure below captures the
+            // same reference the dialogue is advertising.
+            Mission? activeMission = state == BrokerState.ReadyToClaim
+                ? plugin.PlayerView.GetActive(record.StoryId)
+                : null;
+
+            // A ReadyToClaim click after the mission has already been completed
+            // by some other path (board UI, auto-complete, whatever) will have
+            // activeMission == null. Fall through to vanilla in that rare case.
+            if (state == BrokerState.ReadyToClaim && activeMission == null)
+            {
+                Plugin.Log.LogDebug(
+                    $"[vganima] '{__instance.name}' ReadyToClaim but no active mission for " +
+                    $"storyId={record.StoryId}; falling through");
+                return true;
+            }
 
             var patronCtx = new PatronContext(
-                __instance.name, __instance.isMale, record.Station, record.Mission);
+                __instance.name, __instance.isMale, record.Station, activeMission!);
             var pitch = plugin.PitchProvider.PitchForState(patronCtx, state);
 
+            // Build DialogueLine list. No per-line WithTrigger hooks — the vanilla
+            // DialogueLine.trigger field is only fired AFTER the dialogue's
+            // onComplete (observed in game 2026-04-20: CompleteMission logged
+            // after Depart ran when the trigger was attached mid-line). Chaining
+            // CompleteMission → Depart in onComplete is the order we need so the
+            // mission archives BEFORE the BarUI.RefreshPatrons side-effect inside
+            // Depart re-enters InjectMissionBroker (otherwise the assigner still
+            // sees the storyId as available and spawns a fresh broker in the same
+            // seat — the double-click-to-leave bug).
             var lines = new List<DialogueLine>(pitch.Lines.Count);
-            foreach (var text in pitch.Lines)
+            var nonBlank = new List<string>();
+            foreach (var t in pitch.Lines)
+                if (!string.IsNullOrWhiteSpace(t)) nonBlank.Add(t);
+            if (nonBlank.Count == 0) return true;
+
+            foreach (var text in nonBlank)
             {
-                if (string.IsNullOrWhiteSpace(text)) continue;
                 var character = new Character(__instance.name).WithPortret(__instance.icon);
                 lines.Add(DialogueLine.cDL(character, text));
             }
-            if (lines.Count == 0) return true;  // nothing to show; fall through to vanilla
 
+            var capturedMission = activeMission;
             Action onComplete = state switch
             {
-                BrokerState.Initial => () => PostMission(record),
-                BrokerState.Done    => () => Depart(__instance, record),
-                _                   => NoOp,
+                BrokerState.Initial      => () => AddMission(record.StoryId),
+                BrokerState.InProgress   => NoOp,
+                BrokerState.ReadyToClaim => () =>
+                {
+                    // Order matters — archive first so Depart's RefreshPatrons
+                    // doesn't trip InjectMissionBroker with the same storyId.
+                    CompleteMission(capturedMission!);
+                    Depart(__instance, record);
+                },
+                BrokerState.Done         => () => Depart(__instance, record),
+                _                        => NoOp,
             };
 
             Plugin.Log.LogDebug(
-                $"[vganima] '{__instance.name}' dialogue state={state}, {lines.Count} line(s)");
+                $"[vganima] '{__instance.name}' state={state} storyId={record.StoryId} lines={lines.Count}");
 
             Singleton<DialogueManager>.Instance.StartDialogue(lines, onComplete);
-            return false;  // skip vanilla
+            return false;
         }
         catch (Exception ex)
         {
@@ -64,38 +114,51 @@ internal static class SalesmanPatches
         }
     }
 
-    /// <summary>Posts the broker's mission to the station board on the first
-    /// dialogue close. Idempotent — subsequent calls are no-ops. Also flips
-    /// <see cref="ConversionRecord.Pitched"/> so the state machine can tell
-    /// Initial apart from Done after the mission fully cycles.</summary>
-    private static void PostMission(ConversionRecord record)
+    /// <summary>Hands the storyId to the vanilla factory. Mirrors
+    /// <c>SideMissions.CreatePatrolDialogue</c>'s onComplete.</summary>
+    private static void AddMission(string storyId)
     {
         try
         {
-            record.Pitched = true;
-            var board = record.Station?.missionBoard;
-            if (board == null) return;
-            if (board.availableMissions.Contains(record.Mission)) return;
-
-            board.availableMissions.Add(record.Mission);
-            Plugin.Log.LogInfo(
-                $"[vganima] Posted mission '{record.Mission.name}' onto board at '{record.Station!.name}'");
+            var player = GamePlayer.current;
+            if (player == null)
+            {
+                Plugin.Log.LogWarning($"[vganima] AddMission: GamePlayer.current is null (storyId={storyId})");
+                return;
+            }
+            player.AddMissionWithLog(storyId);
+            Plugin.Log.LogInfo($"[vganima] AddMissionWithLog({storyId}) dispatched via broker");
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] PostMission threw: {ex}");
+            Plugin.Log.LogError($"[vganima] AddMission threw: {ex}");
         }
     }
 
-    /// <summary>Called when the Done-state dialogue closes. Removes the broker
-    /// from the bar's roster and drops their TTS cache so session audio doesn't
-    /// accumulate. The <see cref="ConversionRecord"/> stays in the registry so
-    /// lingering re-clicks before BarUI refreshes route through our prefix
-    /// (same Done dialogue) instead of falling through to vanilla
-    /// <c>Salesman.ShowSalesmanInfo</c> which would try to sell the random
-    /// item vanilla <c>Initialize</c> happened to assign. The registry entry
-    /// GCs naturally once BarUI destroys the broker's prefab on its next
-    /// <c>RefreshPatrons</c> call (ConditionalWeakTable semantics).</summary>
+    /// <summary>Triggers the vanilla mission completion — pays rewards,
+    /// archives the storyId, removes from the active list.</summary>
+    private static void CompleteMission(Mission mission)
+    {
+        try
+        {
+            var player = GamePlayer.current;
+            if (player == null)
+            {
+                Plugin.Log.LogWarning($"[vganima] CompleteMission: GamePlayer.current is null (mission={mission?.name})");
+                return;
+            }
+            player.CompleteMission(mission);
+            Plugin.Log.LogInfo($"[vganima] CompleteMission('{mission?.name}') fired via broker");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogError($"[vganima] CompleteMission threw: {ex}");
+        }
+    }
+
+    /// <summary>Removes the broker from the bar roster, drops warmed TTS
+    /// lines from the cache, and triggers a BarUI refresh so the scene no
+    /// longer renders the broker's stool sprite.</summary>
     private static void Depart(Salesman patron, ConversionRecord record)
     {
         try
@@ -109,8 +172,11 @@ internal static class SalesmanPatches
                 plugin.Vgtts.DropCache(speaker, text);
 
             Plugin.Log.LogInfo(
-                $"[vganima] Broker '{patron.name}' departed after mission completion " +
-                $"(removed from roster: {removed})");
+                $"[vganima] Broker '{patron.name}' departed after storyId={record.StoryId} " +
+                $"resolved (removed from roster: {removed})");
+
+            var barUI = UObject.FindAnyObjectByType<BarUI>();
+            barUI?.RefreshPatrons();
         }
         catch (Exception ex)
         {

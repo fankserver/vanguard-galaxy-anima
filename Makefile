@@ -37,9 +37,13 @@ test:
 deploy: build
 	@test -d "$(PLUGIN_DIR)" || { echo "BepInEx plugins dir not found at $(PLUGIN_DIR)" ; exit 1 ; }
 	@mkdir -p "$(VGANIMA_DIR)"
-	cp "$(BUILDDLL)" "$(VGANIMA_DIR)/"
+	# Copy every runtime assembly from bin/. CopyLocalLockFileAssemblies=true in
+	# VGAnima.csproj restricts bin/ to VGAnima.dll + NuGet runtime deps that the
+	# game doesn't ship (System.Text.Json + its transitive deps); BepInEx / Harmony /
+	# UnityEngine / Newtonsoft are compile-only so they don't land here.
+	cp "$(BUILDDIR)"/*.dll "$(VGANIMA_DIR)/"
 	@if [ -f "$(BUILDDIR)/VGAnima.pdb" ]; then cp "$(BUILDDIR)/VGAnima.pdb" "$(VGANIMA_DIR)/"; fi
-	@echo "Deployed $(DLL) to $(VGANIMA_DIR)"
+	@echo "Deployed $(shell ls $(BUILDDIR)/*.dll | wc -l) DLL(s) to $(VGANIMA_DIR)"
 
 clean:
 	-$(DOTNET) clean VGAnima/VGAnima.csproj

@@ -1,69 +1,91 @@
-# VGAnima — Bar patrons that pitch real missions
+# VGAnima — Bar brokers that pitch LLM-authored jobs
 
-A BepInEx plugin for **Vanguard Galaxy** that converts vanilla bar salesmen into mission-pitchers. They speak a short pitch (voiced by [VGTTS](https://github.com/…) if installed) and post a real game mission to the station's mission board for you to accept.
+A BepInEx plugin for **Vanguard Galaxy** that turns bar patrons into mission brokers. Each broker gets a rich player + world snapshot handed to an OpenAI-compatible LLM, which authors the broker's dialogue on the fly (pitch, check-in, payout). Missions themselves run on the game's vanilla `StoryMission` + `Mission` subsystem — the LLM handles words, the engine handles mechanics.
 
-v0.1 ships with static templated pitch text. v0.2 swaps in LLM-generated dialogue.
+VGTTS voices the dialogue if installed.
 
 ## Install
 
-1. Install [VGTTS](https://nexusmods.com/…) (optional but recommended — without it the pitch is silent).
-2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`.
-3. Launch the game. A `vganima` entry appears in `BepInEx/LogOutput.log` on boot.
+1. Install [VGTTS](https://www.nexusmods.com/) (optional — without it the dialogue runs silent).
+2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. That's the only file the plugin ships (the game supplies `BepInEx`, `HarmonyX`, `Newtonsoft.Json` — no runtime deps to side-load).
+3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
+4. Launch the game. A `vganima` boot line shows up in `BepInEx/LogOutput.log`.
 
 ## Build from source
 
 Prerequisites:
 
-- Sibling checkout at `../vanguard-galaxy/` (VGTTS — we reuse its publicized `Assembly-CSharp.dll`).
-- `dotnet` SDK on PATH, or `/tmp/dnsdk/dotnet/dotnet`.
+- Sibling checkout of the VGTTS repo at `../vanguard-galaxy-tts/` (we symlink its publicized `Assembly-CSharp.dll`).
+- `dotnet` SDK on PATH, or a pre-staged install at `/tmp/dnsdk/dotnet/dotnet`.
 
 ```bash
-make build            # compiles to VGAnima/bin/Debug/netstandard2.1/VGAnima.dll
-make test             # runs unit tests
-make deploy           # copies DLL into BepInEx/plugins/VGAnima/
-make clean            # removes bin/ obj/ dist/
+make build             # compiles VGAnima/bin/Debug/netstandard2.1/VGAnima.dll
+make test              # runs the full xUnit suite
+make deploy            # copies the DLL into <game>/BepInEx/plugins/VGAnima/
+make clean             # removes bin/ obj/ dist/
 ```
 
 ## Config (`BepInEx/config/vganima.cfg`)
 
 | Section | Key | Default | Purpose |
 |---|---|---|---|
-| `General` | `Enabled` | `true` | master toggle |
-| `General` | `MissionChance` | `1.0` | per-salesman conversion probability |
-| `General` | `MissionTypes` | `Courier` | comma-separated generator IDs |
-| `LLM` | `Backend` | `static` | v0.1 only supports `static` |
-| `LLM` | `Endpoint` | `https://api.openai.com/v1` | (v0.2) |
-| `LLM` | `ApiKey` | _(empty)_ | (v0.2) never logged |
-| `LLM` | `Model` | `gpt-4o-mini` | (v0.2) |
+| `General` | `Enabled` | `true` | Master toggle. When false VGAnima does nothing. |
+| `General` | `MissionChance` | `1.0` | Per-patron conversion probability (`0.0..1.0`). |
+| `Llm` | `Enabled` | `false` | Master switch for LLM-authored broker dialogue. When false, no broker is injected anywhere. |
+| `Llm` | `BaseUrl` | _(empty)_ | OpenAI-compatible endpoint base, e.g. `https://host/v1`. Blank disables LLM dispatch. |
+| `Llm` | `Model` | `qwen` | Model identifier passed in the chat completions request body. |
+| `Llm` | `TimeoutSeconds` | `15` | Per-call timeout. On expiry the call is cancelled and no broker is injected. |
+| `Llm` | `ApiKey` | _(empty)_ | Optional Bearer token. Never logged in cleartext (only as `<set>`/`<empty>`). |
+| `Llm` | `EnableThinking` | `false` | Passed as `chat_template_kwargs.enable_thinking` for vLLM Qwen. Harmless on other backends. |
+| `Llm` | `MaxTokens` | `1200` | Token ceiling on the completion. |
+| `Llm` | `Temperature` | `0.8` | Sampling temperature. Higher = more varied, lower = more deterministic. |
 
-## Manual E2E smoke test (v0.1 acceptance)
+## How it works
 
-Run this every time you change patch behavior. Takes ~5 minutes in-game.
+1. **Bar injection.** When the player docks, `BarRefreshPatches` looks for a converted patron slot. If the LLM is enabled and `MissionChance` rolls through, an async pipeline fires:
+   - `ContextGatherer` snapshots the player (level, credits, fleet, cargo, faction reputations, active missions, waypoints, story arcs) and the world (current station + facilities, connected systems, time).
+   - `HttpLlmClient` POSTs the snapshot to `<BaseUrl>/chat/completions` with a strict system prompt asking for `{ schema, pitch, check_in, payout }` lines.
+   - `ResponseValidator` enforces the `vganima/story/v1` schema — wrong schema value, extra keys, non-ASCII text, bad line counts all reject and the broker is silently skipped.
+   - On success, a Salesman is minted with a seed-prefixed name (`vganima-broker-<station-guid>-N`) and the validated dialogue cached inside its `ConversionRecord`.
+2. **Talk to the broker.** `SalesmanPatches` picks a `BrokerState` based on the mission's position in `GamePlayer.missionsArchive` / `GetActiveStoryMission`:
+   - `Initial` → play the `pitch` block, on dialogue close call `AddMissionWithLog` to activate the vanilla mission (the static `Jobsite Survey` test template for now).
+   - `InProgress` → play `check_in`.
+   - `ReadyToClaim` → play `payout`, fire `CompleteMission` (rewards land), then the broker departs in the same click.
+   - `Done` → one last farewell and the broker departs.
+3. **Rehydration.** On every bar re-open we spot seed-prefixed brokers that have no registry entry (save/load, bar refresh), fire the LLM again on each, and rebuild their record asynchronously.
 
-1. **Deploy:** `make deploy`
-2. **Launch the game.** Tail the log: `tail -f '<game>/BepInEx/LogOutput.log' | grep vganima`
-3. **Expect at boot:**
-   - `[vganima] VGTTS detected: yes` (if VGTTS is installed)
-   - `[vganima] MissionTypes: [Courier]  Chance: 1  Backend: static`
-   - `Vanguard Galaxy Anima v0.1.0 loaded (3 patches)`
-4. **Load a save, dock at any space station with a bar, enter the bar.**
-5. **Expect in the log** (one per salesman):
-   - `[vganima] Injected mission '<name>' onto board at '<station>'`
-   - `[vganima] Converted salesman '<name>' — 3 pitch lines, voice=kokoro:12` (or `:9`)
-6. **Click a converted salesman.** You should see our 3 pitch lines (the third mentions the board). VGTTS voices them if installed. Dialogue closes with no "buy this item" UI.
-7. **Open the mission board.** Confirm the injected mission is listed.
-8. **Accept the mission.** Fly, complete it, collect reward. Normal vanilla flow.
-9. **Wait for the bar to refresh** (next in-game day or trigger via console), re-enter bar:
-   - Rolled-off patrons evicted: `[vganima] Evicted rolled-off patron '<name>'`
-   - New salesmen convert again (if `MissionChance` roll succeeds).
+Cache lifetime is strictly per-broker; when the broker is evicted the dialogue dies with it. No cross-broker reuse, no cross-session persistence.
+
+## Failure matrix
+
+Every LLM failure path is logged and **no broker is injected** — there's no static fallback.
+
+| What went wrong | Log level | Marker |
+|---|---|---|
+| `Llm.Enabled=false` or `BaseUrl` blank | Debug | `LLM disabled; skipping broker injection` |
+| HTTP timeout | Warning | `LLM timeout after Ns; skipping broker at '<station>'` |
+| HTTP non-2xx | Warning | `LLM returned <status>; skipping broker at '<station>'` |
+| Network exception | Warning | `LLM request failed: <msg>; skipping broker` |
+| Malformed JSON | Warning | `LLM response failed validation: content is not valid json ...` |
+| Schema mismatch | Info | `LLM response failed validation: <field> <rule>; skipping` |
+| Unclassified | Error | Full stack trace |
 
 ## Troubleshooting
 
-- **No `[vganima]` lines in log** — plugin didn't load. Check that `VGAnima.dll` is in `BepInEx/plugins/VGAnima/` and that BepInEx itself is installed (look for `BepInEx/LogOutput.log`).
-- **`VGTTS detected: no`** — VGTTS isn't installed or failed to load. Dialogue still works silently.
-- **Salesman pitch text appears but mission isn't on the board** — `MissionGenerator.Get("Courier")` returned null. Check the `MissionTypes` config value matches a real generator ID.
-- **Game throws on dialogue open** — our `SalesmanPatches` prefix hit an unexpected shape. Disable it via `Enabled = false` in config and report the stack trace from `BepInEx/LogOutput.log`.
+- **No `[vganima]` lines in log** — plugin didn't load. Check `VGAnima.dll` is in `BepInEx/plugins/VGAnima/` and BepInEx itself logs in `BepInEx/LogOutput.log`.
+- **Boot log shows `LLM enabled: no`** — set `Llm.Enabled=true` AND `Llm.BaseUrl=...` in `vganima.cfg`. Both must be filled.
+- **Broker never appears** — check the boot log confirmed `LLM enabled: yes`, then watch for the LLM dispatch line: `Dispatching LLM for broker at '<station>'`. If that line is missing the probability roll failed (`MissionChance` < 1.0) or a vanilla NPC is hogging the seat budget.
+- **`FileNotFoundException: System.Text.Json`** — you're running an older build that shipped STJ. Re-deploy the current `VGAnima.dll` — current builds use `Newtonsoft.Json` (bundled by the game) and no longer need STJ.
+- **Broker name changes after save/reload** — known limitation. Only the Salesman's seed is persisted by vanilla `BarPatron.ToJson`; our in-memory `_name` override is lost on load and the seeded-random regenerates ("The Mission Broker" → "Shawn Jenkins" etc.). The storyId assignment survives.
 
-## Architecture
+## Roadmap
 
-See `docs/superpowers/specs/2026-04-20-vganima-design.md`.
+The LLM output schema is versioned (`vganima/story/v1`). Future slices extend the schema one concern at a time:
+
+- **v2** — `theme` tag; LLM picks the mission template from an expanded whitelist.
+- **v3** — `objective` object; LLM chooses a `MissionTrigger` + required amount.
+- **v4** — `rewards`; LLM picks clamped amounts from whitelisted reward types.
+- **v5** — `turn_in` POI; LLM can route turn-in to other stations.
+- **v6+** — multi-mission chains, cross-session persistence, prompt caching.
+
+See `docs/superpowers/notes/2026-04-20-vganima-llm-authored-missions-future.md` for the broader Option C design sketch.

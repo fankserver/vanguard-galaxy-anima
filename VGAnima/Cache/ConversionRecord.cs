@@ -1,34 +1,44 @@
 using System.Collections.Generic;
 using Source.Galaxy.POI;
-using Source.MissionSystem;
+using VGAnima.Llm;
 
 namespace VGAnima.Cache;
 
-/// <summary>Everything the broker lifecycle needs:
+/// <summary>Broker-level bookkeeping for one converted Salesman:
 ///   <list type="bullet">
-///     <item>The injected <see cref="Mission"/> — removed from the board on patron rolloff.</item>
-///     <item>Warmed TTS lines — dropped from VGTTS cache on rolloff.</item>
-///     <item>The <see cref="SpaceStation"/> for mission-board access.</item>
-///     <item>A <see cref="Pitched"/> flag, flipped on the first dialogue close.
-///       Used to distinguish "never talked to broker" (Initial state) from
-///       "mission cycled through, rewarded" (Done state) — both of which have
-///       the mission absent from both board and player missions.</item>
+///     <item>Warmed TTS lines for every pitch variant across all broker states
+///       — dropped from VGTTS cache when the broker departs.</item>
+///     <item>The source <see cref="SpaceStation"/> the broker was injected at
+///       (used for rolloff eviction, departure cleanup, and broker identification
+///       via seed prefix).</item>
+///     <item>The single vanilla <c>storyId</c> this broker offers — one of
+///       <c>SideMissionPatrol</c> / <c>SideMissionBounty</c> / <c>SideMissionFastLane</c>
+///       OR <c>vganima_test_jobsite_survey</c>. One broker owns exactly one mission
+///       (Option A contract).</item>
+///     <item>Optional <see cref="LlmStory"/> — the validated LLM-authored dialogue
+///       (v1: pitch / check_in / payout strings). Null for rehydrated brokers until
+///       a fresh LLM call lands, and null on test paths that don't run the LLM.
+///       Non-null on the happy broker-injection path once Task 8 lands.</item>
 ///   </list>
-/// Not a record (was one originally) because <c>Pitched</c> must be mutable.</summary>
+/// Not persisted — derived on bar open from the seed prefix + assigner; LlmStory
+/// dies with the record (eviction or departure) and is re-synthesised on the next
+/// injection of the same seed.</summary>
 internal sealed class ConversionRecord
 {
-    public Mission Mission { get; }
     public IReadOnlyList<(string Speaker, string Text)> WarmedLines { get; }
     public SpaceStation Station { get; }
-    public bool Pitched { get; set; }
+    public string StoryId { get; }
+    public LlmStory? LlmStory { get; }
 
     public ConversionRecord(
-        Mission mission,
         IReadOnlyList<(string Speaker, string Text)> warmedLines,
-        SpaceStation station)
+        SpaceStation station,
+        string storyId,
+        LlmStory? llmStory = null)
     {
-        Mission = mission;
         WarmedLines = warmedLines;
         Station = station;
+        StoryId = storyId;
+        LlmStory = llmStory;
     }
 }

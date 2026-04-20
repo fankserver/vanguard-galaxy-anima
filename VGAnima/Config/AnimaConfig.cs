@@ -2,37 +2,45 @@ using BepInEx.Configuration;
 
 namespace VGAnima.Config;
 
-/// <summary>Typed accessors for all BepInEx <see cref="ConfigEntry{T}"/> bindings.
-/// Constructed once in <see cref="Plugin.Awake"/>; passed around by value so
-/// every consumer sees the same config source.</summary>
+/// <summary>Typed accessors for every BepInEx <see cref="ConfigEntry{T}"/> the
+/// plugin binds. Constructed once in <see cref="Plugin.Awake"/>; passed around
+/// by value so every consumer sees the same config source.</summary>
 internal sealed class AnimaConfig
 {
-    public ConfigEntry<bool>   Enabled         { get; }
-    public ConfigEntry<float>  MissionChance   { get; }
-    public ConfigEntry<string> MissionTypes    { get; }
-    public ConfigEntry<string> LlmBackend      { get; }
-    public ConfigEntry<string> LlmEndpoint     { get; }
-    public ConfigEntry<string> LlmApiKey       { get; }
-    public ConfigEntry<string> LlmModel        { get; }
+    public ConfigEntry<bool>   Enabled           { get; }
+    public ConfigEntry<float>  MissionChance     { get; }
+
+    public ConfigEntry<bool>   LlmEnabled        { get; }
+    public ConfigEntry<string> LlmBaseUrl        { get; }
+    public ConfigEntry<string> LlmModel          { get; }
+    public ConfigEntry<int>    LlmTimeoutSeconds { get; }
+    public ConfigEntry<string> LlmApiKey         { get; }
+    public ConfigEntry<bool>   LlmEnableThinking { get; }
+    public ConfigEntry<int>    LlmMaxTokens      { get; }
+    public ConfigEntry<float>  LlmTemperature    { get; }
 
     public AnimaConfig(ConfigFile cf)
     {
         Enabled = cf.Bind("General", "Enabled", true,
             "Master toggle. When false, VGAnima does nothing.");
         MissionChance = cf.Bind("General", "MissionChance", 1.0f,
-            "Per-salesman conversion probability (0.0..1.0). 1.0 means every salesman offers a board mission.");
-        MissionTypes = cf.Bind("General", "MissionTypes", "Courier",
-            "Comma-separated list of MissionGenerator identifiers eligible for conversion. " +
-            "v0.1 supports Courier only.");
+            "Per-salesman conversion probability (0.0..1.0). 1.0 converts every eligible patron into a broker.");
 
-        LlmBackend = cf.Bind("LLM", "Backend", "static",
-            "Pitch text backend. v0.1 supports only 'static' (templated strings). " +
-            "v0.2 adds 'openai' (OpenAI-compatible HTTP endpoints).");
-        LlmEndpoint = cf.Bind("LLM", "Endpoint", "https://api.openai.com/v1",
-            "OpenAI-compatible base URL. Change to point at Ollama, LM Studio, Groq, etc.");
-        LlmApiKey = cf.Bind("LLM", "ApiKey", string.Empty,
-            "Bearer token for the LLM endpoint. Never logged.");
-        LlmModel = cf.Bind("LLM", "Model", "gpt-4o-mini",
-            "Model identifier passed to the LLM endpoint.");
+        LlmEnabled = cf.Bind("Llm", "Enabled", false,
+            "Master switch for LLM-authored broker dialogue. When false, no broker is injected anywhere.");
+        LlmBaseUrl = cf.Bind("Llm", "BaseUrl", string.Empty,
+            "OpenAI-compatible endpoint base, e.g. https://host/v1. Blank disables LLM dispatch.");
+        LlmModel = cf.Bind("Llm", "Model", "qwen",
+            "Model identifier passed in the chat completions request body.");
+        LlmTimeoutSeconds = cf.Bind("Llm", "TimeoutSeconds", 15,
+            "Per-call timeout. On expiry the call is cancelled and no broker is injected.");
+        LlmApiKey = cf.Bind("Llm", "ApiKey", string.Empty,
+            "Optional Bearer token. Never logged in cleartext (only as <set>/<empty>).");
+        LlmEnableThinking = cf.Bind("Llm", "EnableThinking", false,
+            "Passed as chat_template_kwargs.enable_thinking for vLLM Qwen. Harmless on other backends.");
+        LlmMaxTokens = cf.Bind("Llm", "MaxTokens", 1200,
+            "Token ceiling on the completion. 1200 comfortably covers the v1 dialogue schema.");
+        LlmTemperature = cf.Bind("Llm", "Temperature", 0.8f,
+            "Sampling temperature for the completion. Higher = more varied, lower = more deterministic.");
     }
 }

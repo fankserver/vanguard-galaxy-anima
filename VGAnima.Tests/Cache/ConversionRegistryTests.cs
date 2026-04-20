@@ -49,4 +49,45 @@ public class ConversionRegistryTests
 
         Assert.False(reg.TryGet(key, out _));
     }
+
+    [Fact]
+    public void FindByValue_ReturnsNull_WhenEmpty()
+    {
+        var reg = new ConversionRegistry<FakePatron, string>();
+        Assert.Null(reg.FindByValue(s => s == "anything"));
+    }
+
+    [Fact]
+    public void FindByValue_ReturnsMatch_WhenPredicateMatches()
+    {
+        var reg = new ConversionRegistry<FakePatron, string>();
+        var a = new FakePatron();
+        var b = new FakePatron();
+        reg.Register(a, "alpha");
+        reg.Register(b, "beta");
+
+        Assert.Equal("beta", reg.FindByValue(s => s == "beta"));
+    }
+
+    [Fact]
+    public void FindByValue_ReturnsNull_WhenNoMatch()
+    {
+        var reg = new ConversionRegistry<FakePatron, string>();
+        reg.Register(new FakePatron(), "alpha");
+        Assert.Null(reg.FindByValue(s => s == "omega"));
+    }
+
+    [Fact]
+    public void FindByValue_ReturnsNullForReclaimedKeys_AfterGC()
+    {
+        // Smoke test that FindByValue doesn't throw when the table has
+        // entries whose weak keys have been reclaimed. Not deterministic —
+        // tolerate either null or "alpha"; just must not throw.
+        var reg = new ConversionRegistry<FakePatron, string>();
+        reg.Register(new FakePatron(), "alpha");
+        System.GC.Collect();
+        System.GC.WaitForPendingFinalizers();
+        var result = reg.FindByValue(s => s == "alpha");
+        Assert.True(result is null or "alpha", $"unexpected: {result}");
+    }
 }

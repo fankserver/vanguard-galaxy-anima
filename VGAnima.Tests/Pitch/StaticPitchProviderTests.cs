@@ -18,57 +18,52 @@ public class StaticPitchProviderTests
     }
 
     [Fact]
-    public void Initial_ContainsBoardReference()
+    public void Initial_HasThreeToFiveLines()
     {
         var provider = new StaticPitchProvider();
         var result = provider.PitchForState(Ctx(), BrokerState.Initial);
-        Assert.True(result.Lines.Count >= 3, $"Expected >=3 lines, got {result.Lines.Count}");
-        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("board"));
+        Assert.InRange(result.Lines.Count, 3, 5);
+        foreach (var line in result.Lines) Assert.False(string.IsNullOrWhiteSpace(line));
     }
 
     [Fact]
-    public void Waiting_ReferencesBoard()
-    {
-        var provider = new StaticPitchProvider();
-        var result = provider.PitchForState(Ctx(), BrokerState.Waiting);
-        Assert.NotEmpty(result.Lines);
-        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("board"));
-    }
-
-    [Fact]
-    public void InProgress_AsksAboutProgress()
+    public void InProgress_HasOneOrTwoLines()
     {
         var provider = new StaticPitchProvider();
         var result = provider.PitchForState(Ctx(), BrokerState.InProgress);
-        Assert.NotEmpty(result.Lines);
+        Assert.InRange(result.Lines.Count, 1, 2);
+        foreach (var line in result.Lines) Assert.False(string.IsNullOrWhiteSpace(line));
     }
 
     [Fact]
-    public void ReadyToClaim_PromptsReport()
+    public void ReadyToClaim_HasThreeToFourLines()
     {
+        // Must have enough lines for one of them to carry the CompleteMission
+        // trigger without awkwardly short dialogue.
         var provider = new StaticPitchProvider();
         var result = provider.PitchForState(Ctx(), BrokerState.ReadyToClaim);
-        Assert.NotEmpty(result.Lines);
-        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("board"));
+        Assert.InRange(result.Lines.Count, 3, 4);
+        foreach (var line in result.Lines) Assert.False(string.IsNullOrWhiteSpace(line));
     }
 
     [Fact]
-    public void Done_Thanks()
+    public void Done_HasOneOrTwoLines()
     {
         var provider = new StaticPitchProvider();
         var result = provider.PitchForState(Ctx(), BrokerState.Done);
-        Assert.NotEmpty(result.Lines);
-        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("thank"));
+        Assert.InRange(result.Lines.Count, 1, 2);
+        foreach (var line in result.Lines) Assert.False(string.IsNullOrWhiteSpace(line));
     }
 
     [Theory]
     [InlineData(BrokerState.Initial)]
-    [InlineData(BrokerState.Waiting)]
     [InlineData(BrokerState.InProgress)]
     [InlineData(BrokerState.ReadyToClaim)]
     [InlineData(BrokerState.Done)]
-    internal void AllStates_UseAsciiOnlyPunctuation(BrokerState state)
+    public void AllStates_UseAsciiOnlyPunctuation(BrokerState state)
     {
+        // The game's pixel16 font renders non-ASCII as blank spaces. Enforce
+        // ASCII-only so em-dashes / smart quotes don't slip back in.
         var provider = new StaticPitchProvider();
         var result = provider.PitchForState(Ctx(), state);
         foreach (var line in result.Lines)
