@@ -75,13 +75,9 @@ internal static class BarPatronPatches
         // board. Mission.name is a public field so direct assignment works.
         mission.name = $"[VGA] {mission.name}";
 
-        // 3. Inject into the station's mission board (unconditional Add — the
-        // next timer-based RegenerateMissions clears the list anyway).
-        if (station.missionBoard != null)
-        {
-            station.missionBoard.availableMissions.Add(mission);
-            Plugin.Log.LogInfo($"[vganima] Injected mission '{mission.name}' onto board at '{station.name}'");
-        }
+        // Note: mission is NOT posted to the board yet. SalesmanPatches posts it
+        // when the player finishes the pitch dialogue — matches the narrative
+        // "I've posted the request on the board" (future tense until they click).
 
         // 3. Build pitch lines.
         var patronCtx = new PatronContext(salesman.name, salesman.isMale, station, mission);

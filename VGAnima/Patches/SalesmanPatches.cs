@@ -25,14 +25,14 @@ internal static class SalesmanPatches
     {
         try
         {
-            if (Plugin.Instance is not { } plugin) return true;            // let vanilla run
-            if (!plugin.Registry.TryGet(__instance, out _)) return true;   // not ours
+            if (Plugin.Instance is not { } plugin) return true;             // let vanilla run
+            if (!plugin.Registry.TryGet(__instance, out var record)) return true;  // not ours
 
             var lines = Traverse.Create(__instance).Field<List<DialogueLine>>("dialogueLines").Value;
-            if (lines == null || lines.Count == 0) return true;            // nothing to show; let vanilla
+            if (lines == null || lines.Count == 0) return true;             // nothing to show; let vanilla
 
-            Singleton<DialogueManager>.Instance.StartDialogue(lines, NoOp);
-            return false;                                                  // skip vanilla method
+            Singleton<DialogueManager>.Instance.StartDialogue(lines, () => PostMission(record));
+            return false;                                                   // skip vanilla method
         }
         catch (Exception ex)
         {
@@ -41,5 +41,24 @@ internal static class SalesmanPatches
         }
     }
 
-    private static readonly Action NoOp = static () => { };
+    /// <summary>Invoked when the player finishes the pitch dialogue. Posts the
+    /// mission to the station's board if it isn't already there. Idempotent —
+    /// re-clicking the patron after posting does not duplicate.</summary>
+    private static void PostMission(Cache.ConversionRecord record)
+    {
+        try
+        {
+            var board = record.Station?.missionBoard;
+            if (board == null) return;
+            if (board.availableMissions.Contains(record.Mission)) return;   // already posted
+
+            board.availableMissions.Add(record.Mission);
+            Plugin.Log.LogInfo(
+                $"[vganima] Posted mission '{record.Mission.name}' onto board at '{record.Station!.name}'");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogError($"[vganima] PostMission threw: {ex}");
+        }
+    }
 }
