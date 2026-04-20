@@ -54,7 +54,6 @@ public class Plugin : BaseUnityPlugin
                     $"Chance: {Cfg.MissionChance.Value}  Backend: {Cfg.LlmBackend.Value}");
 
         _harmony = new Harmony(PluginGuid);
-        _harmony.PatchAll(typeof(BarPatronPatches));
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
 
