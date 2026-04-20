@@ -47,20 +47,21 @@ internal sealed class VanillaMissionSource : IMissionSource
             .Method("GetSeededRandom")
             .GetValue<SeededRandom>();
 
-        // Instance GenerateMission signature (4 params, verified via IL dump):
-        //   Mission GenerateMission(MapPointOfInterest poi, MissionDifficulty difficulty,
-        //                           SeededRandom random, Nullable<TargetLayer> targetLayer)
-        // SpaceStation : MapPointOfInterest so we can pass it directly. Difficulty
-        // defaults to Normal; the game's own MissionBoard path uses MissionDifficultyExtension
-        // to randomise across unlocked tiers, but we prefer the simple default here.
-        // targetLayer is left null so the generator picks its own default.
+        // Use the STATIC wrapper MissionGenerator.GenerateMission(...) — not the
+        // instance method. The wrapper calls the instance generator to build the
+        // Mission and then sets Mission.sourcePoi, sourceFaction, sourceName,
+        // turnIn, and difficulty on the result. Calling the instance directly
+        // leaves those fields null and MissionDetails.ShowMission NREs on them.
+        //   static: Mission GenerateMission(MissionGenerator gen, MissionDifficulty,
+        //                                   MapPointOfInterest poi, SeededRandom,
+        //                                   Nullable<TargetLayer>)
         try
         {
-            return generator.GenerateMission(station, MissionDifficulty.Normal, rng, null);
+            return MissionGenerator.GenerateMission(generator, MissionDifficulty.Normal, station, rng, null);
         }
         catch (System.Exception ex)
         {
-            Plugin.Log.LogWarning($"[vganima] MissionGenerator.{type}.GenerateMission threw: {ex.Message}");
+            Plugin.Log.LogWarning($"[vganima] MissionGenerator.GenerateMission({type}) threw: {ex.Message}");
             return null;
         }
     }
