@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>VGAnima.Tests</RootNamespace>
+    <!-- Referencing VGAnima.csproj transitively pulls BepInEx.Core etc. from
+         nuget.bepinex.dev; the Microsoft.NET.Test.Sdk + xunit packages live on
+         nuget.org. Include both so restore works from either direction. -->
+    <RestoreAdditionalProjectSources>
+      https://api.nuget.org/v3/index.json;
+      https://nuget.bepinex.dev/v3/index.json;
+    </RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
+    <!-- PatronContext surfaces SpaceStation (Unity MonoBehaviour subtype), so
+         the CLR needs UnityEngine.* reference assemblies to JIT its ctor. -->
+    <PackageReference Include="UnityEngine.Modules" Version="6000.2.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VGAnima\VGAnima.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Needed because VGAnima internal types (PatronContext, etc.) surface
+         game types like SpaceStation/Mission in their signatures. Shares the
+         same symlinked stub as VGAnima.csproj via `make link-asm`. Unlike
+         the plugin project (Private=false, game provides it at runtime), the
+         test project must copy the stub so xUnit can resolve the types. -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>..\VGAnima\lib\Assembly-CSharp.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

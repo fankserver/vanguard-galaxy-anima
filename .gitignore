@@ -1,0 +1,14 @@
+# .NET build artifacts
+VGAnima/bin/
+VGAnima/obj/
+VGAnima.Tests/bin/
+VGAnima.Tests/obj/
+dist/
+
+# Publicized stub — symlinked by `make link-asm`; do not commit
+VGAnima/lib/
+
+# Editor cruft
+.vs/
+.idea/
+*.user
