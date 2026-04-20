@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Behaviour.UI.Spacestation.Bar;
 using HarmonyLib;
 using Source.Dialogues;
 using Source.Galaxy.POI;
@@ -12,6 +13,7 @@ using Source.Galaxy.POI.Station.Patrons;
 using VGAnima.Cache;
 using VGAnima.Missions;
 using VGAnima.Pitch;
+using UObject = UnityEngine.Object;
 
 namespace VGAnima.Patches;
 
@@ -21,9 +23,10 @@ namespace VGAnima.Patches;
 ///   2. Postfix evicts registry entries + injected missions for patrons that
 ///      rolled off (diff snapshot vs. new roster).
 ///   3. Postfix also injects ONE extra mission-broker <see cref="Salesman"/>
-///      into the bar when there's room — alongside vanilla patrons, never
-///      replacing one. HarmonyAfter("vgtts") so our injected patron isn't
-///      caught by VGTTS's own eviction diff.
+///      into the bar when the player is at the station AND <see cref="BarUI"/>
+///      is loaded (so we can read the real seatIndex pool for the scene).
+///      HarmonyAfter("vgtts") so our injected patron isn't caught by VGTTS's
+///      own eviction diff.
 /// </summary>
 [HarmonyPatch(typeof(Bar))]
 internal static class BarRefreshPatches
@@ -103,6 +106,34 @@ internal static class BarRefreshPatches
         foreach (var p in bar.availablePatrons)
             if (plugin.Registry.TryGet(p, out _)) return;
 
+        // Bar.spaceStation is `private` at runtime (publicizer lies) — Traverse it.
+        var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
+        if (station == null) return;
+
+        // Scope: only inject when the player is docked at this station.
+        if (SpaceStation.current != station) return;
+
+        // BarUI is a scene MonoBehaviour loaded with SpacestationInterior. Its
+        // `patronSprites` list defines the valid (seatIndex, isMale) pairs the
+        // bar scene can render. On game boot we may be called before the
+        // interior loads — skip and rely on the re-run when the player opens
+        // the bar UI (BarUI.RefreshPatrons invokes CheckUpdatePatrons again).
+        var barUI = UObject.FindAnyObjectByType<BarUI>();
+        if (barUI == null)
+        {
+            Plugin.Log.LogDebug("[vganima] BarUI not in scene yet; deferring broker injection");
+            return;
+        }
+
+        var sprites = Traverse.Create(barUI)
+            .Field<List<BarPatronSprite>>("patronSprites")
+            .Value;
+        if (sprites == null || sprites.Count == 0)
+        {
+            Plugin.Log.LogWarning("[vganima] BarUI.patronSprites empty; aborting injection");
+            return;
+        }
+
         // Per-bar probability roll.
         if (UnityEngine.Random.value > plugin.Cfg.MissionChance.Value)
         {
@@ -110,32 +141,31 @@ internal static class BarRefreshPatches
             return;
         }
 
-        // Bar.spaceStation is `private` at runtime (publicizer lies) — Traverse it.
-        var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
-        if (station == null) return;
-
-        // Scope: only inject at the station the player is currently docked at.
-        // Bar.CheckUpdatePatrons fires galaxy-wide on save load (every station's
-        // bar is re-rolled during initial generation), so without this filter we
-        // spawn a broker in every bar in the universe — most of which the player
-        // will never see, wasting VGTTS warm cycles on unreachable patrons.
-        // Broaden to `station.system == SpaceStation.current?.system` later for
-        // in-system pre-generation during warp.
-        if (SpaceStation.current != station) return;
-
         // Create the new patron. Salesman(SpaceStation) ctor sets the protected
-        // spaceStation field. Assign a seat index that isn't already taken.
+        // spaceStation field. Initialize() picks a random variant and sets
+        // _name, _isMale, _icon, description, itemForSale, vanilla dialogueLines.
         var newPatron = new Salesman(station);
-        var usedSeats = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
-        var seat = 0;
-        while (usedSeats.Contains(seat)) seat++;
-        newPatron.seat = seat;
-
-        // Vanilla init picks a random salesman variant — sets _name, _isMale,
-        // _icon, description, itemForSale, and vanilla dialogueLines. We only
-        // need the name/icon for the character portrait; we overwrite
-        // dialogueLines with our pitch below.
         newPatron.Initialize();
+
+        // Pick a seatIndex from patronSprites matching the patron's gender. Prefer
+        // one not already used by an existing patron of the same gender (the UI
+        // filters sprites by both seat AND isMale, and each seat/gender slot
+        // renders one sprite).
+        var genderSeats = sprites
+            .Where(s => s.isMale == newPatron.isMale)
+            .Select(s => s.seatIndex)
+            .Distinct()
+            .ToList();
+        if (genderSeats.Count == 0)
+        {
+            Plugin.Log.LogWarning($"[vganima] No patronSprites for isMale={newPatron.isMale}; aborting");
+            return;
+        }
+        var usedByGender = new HashSet<int>(bar.availablePatrons
+            .Where(p => p.isMale == newPatron.isMale)
+            .Select(p => p.seat));
+        var freeSeats = genderSeats.Where(s => !usedByGender.Contains(s)).ToList();
+        newPatron.seat = freeSeats.Count > 0 ? freeSeats[0] : genderSeats[0];
 
         // Generate the real game mission.
         var ctx = new MissionContext(station, station.level, newPatron);
@@ -183,6 +213,6 @@ internal static class BarRefreshPatches
 
         Plugin.Log.LogInfo(
             $"[vganima] Added mission broker '{newPatron.name}' to bar at '{station.name}' " +
-            $"(seat {seat}, {bar.availablePatrons.Count} patrons total)");
+            $"(seat {newPatron.seat}, isMale={newPatron.isMale}, {bar.availablePatrons.Count} patrons total)");
     }
 }
