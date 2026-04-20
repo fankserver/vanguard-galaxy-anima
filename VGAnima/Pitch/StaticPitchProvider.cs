@@ -9,9 +9,12 @@ internal sealed class StaticPitchProvider : IPitchProvider
 {
     public PitchResult Pitch(PatronContext ctx)
     {
+        // ASCII-only punctuation. The game's pixel16 font lacks em-dashes
+        // (U+2014), smart quotes, and most extended Latin — they silently
+        // render as spaces in the dialogue UI.
         return new PitchResult(new[]
         {
-            "Captain — I've got a run that needs a steady hand.",
+            "Captain, I've got a run that needs a steady hand.",
             "Nothing fancy. Cargo haul to a neighbour system, decent pay, fair turnaround.",
             "I've posted the request on the station board. Grab it if you're in.",
         });
