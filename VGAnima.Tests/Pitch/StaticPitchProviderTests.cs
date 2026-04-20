@@ -5,44 +5,75 @@ namespace VGAnima.Tests.Pitch;
 
 public class StaticPitchProviderTests
 {
+    private static PatronContext Ctx(bool isMale = true) =>
+        new("Test Broker", isMale, Station: null!, Mission: null!);
+
     [Fact]
-    public void Pitch_ContainsBoardReference()
+    public void Pitch_EqualsInitialState()
     {
         var provider = new StaticPitchProvider();
-        var ctx = new PatronContext(
-            NpcName: "Robert Miyama",
-            IsMale: true,
-            Station: null!,                    // unused by static provider
-            Mission: null!);                   // unused by static provider
+        var direct = provider.Pitch(Ctx());
+        var viaState = provider.PitchForState(Ctx(), BrokerState.Initial);
+        Assert.Equal(direct.Lines, viaState.Lines);
+    }
 
-        var result = provider.Pitch(ctx);
+    [Fact]
+    public void Initial_ContainsBoardReference()
+    {
+        var provider = new StaticPitchProvider();
+        var result = provider.PitchForState(Ctx(), BrokerState.Initial);
+        Assert.True(result.Lines.Count >= 3, $"Expected >=3 lines, got {result.Lines.Count}");
+        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("board"));
+    }
 
+    [Fact]
+    public void Waiting_ReferencesBoard()
+    {
+        var provider = new StaticPitchProvider();
+        var result = provider.PitchForState(Ctx(), BrokerState.Waiting);
         Assert.NotEmpty(result.Lines);
         Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("board"));
     }
 
     [Fact]
-    public void Pitch_IncludesNpcName()
+    public void InProgress_AsksAboutProgress()
     {
         var provider = new StaticPitchProvider();
-        var ctx = new PatronContext("Alex Chen", IsMale: false, Station: null!, Mission: null!);
+        var result = provider.PitchForState(Ctx(), BrokerState.InProgress);
+        Assert.NotEmpty(result.Lines);
+    }
 
-        var result = provider.Pitch(ctx);
+    [Fact]
+    public void ReadyToClaim_PromptsReport()
+    {
+        var provider = new StaticPitchProvider();
+        var result = provider.PitchForState(Ctx(), BrokerState.ReadyToClaim);
+        Assert.NotEmpty(result.Lines);
+        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("board"));
+    }
 
-        Assert.True(result.Lines.Count >= 3,
-            $"Expected >=3 pitch lines, got {result.Lines.Count}");
+    [Fact]
+    public void Done_Thanks()
+    {
+        var provider = new StaticPitchProvider();
+        var result = provider.PitchForState(Ctx(), BrokerState.Done);
+        Assert.NotEmpty(result.Lines);
+        Assert.Contains(result.Lines, l => l.ToLowerInvariant().Contains("thank"));
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Pitch_IsGenderAgnostic_Structurally(bool isMale)
+    [InlineData(BrokerState.Initial)]
+    [InlineData(BrokerState.Waiting)]
+    [InlineData(BrokerState.InProgress)]
+    [InlineData(BrokerState.ReadyToClaim)]
+    [InlineData(BrokerState.Done)]
+    internal void AllStates_UseAsciiOnlyPunctuation(BrokerState state)
     {
         var provider = new StaticPitchProvider();
-        var ctx = new PatronContext("Test Name", isMale, null!, null!);
-
-        var result = provider.Pitch(ctx);
-
-        Assert.Equal(3, result.Lines.Count);
+        var result = provider.PitchForState(Ctx(), state);
+        foreach (var line in result.Lines)
+            foreach (var ch in line)
+                Assert.True(ch < 128,
+                    $"Non-ASCII char U+{(int)ch:X4} '{ch}' in {state} line: \"{line}\"");
     }
 }

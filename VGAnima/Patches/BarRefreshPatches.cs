@@ -222,11 +222,14 @@ internal static class BarRefreshPatches
 
         mission.name = $"[VGA] {mission.name}";
 
-        // Build pitch + override dialogueLines.
+        // Build the Initial pitch + override dialogueLines so the patron's
+        // static field holds our text (SalesmanPatches rebuilds lines fresh
+        // per click, but VGTTS's BarPatron.Initialize postfix reads the field
+        // to warm synth — we want it seeing our text, not the vanilla variant).
         var patronCtx = new PatronContext(newPatron.name, newPatron.isMale, station, mission);
-        var pitch = plugin.PitchProvider.Pitch(patronCtx);
-        var dialogueLines = new List<DialogueLine>(pitch.Lines.Count);
-        foreach (var text in pitch.Lines)
+        var initialPitch = plugin.PitchProvider.PitchForState(patronCtx, BrokerState.Initial);
+        var dialogueLines = new List<DialogueLine>(initialPitch.Lines.Count);
+        foreach (var text in initialPitch.Lines)
         {
             if (string.IsNullOrWhiteSpace(text)) continue;
             var character = new Character(newPatron.name).WithPortret(newPatron.icon);
@@ -234,12 +237,21 @@ internal static class BarRefreshPatches
         }
         Traverse.Create(newPatron).Field<List<DialogueLine>>("dialogueLines").Value = dialogueLines;
 
-        // VGTTS: register voice + warm pitch lines in the background.
+        // VGTTS: register voice + warm EVERY state's lines so switching state
+        // mid-session doesn't pay live-synth cost on the first utterance of
+        // that state. ~11 lines total across 5 states — well under a second.
         var voice = newPatron.isMale ? ProceduralMaleVoice : ProceduralFemaleVoice;
         plugin.Vgtts.RegisterVoice(newPatron.name, voice);
-        var warmedPairs = pitch.Lines
-            .Select(text => (Speaker: newPatron.name, Text: text))
-            .ToList();
+        var warmedPairs = new List<(string Speaker, string Text)>();
+        foreach (BrokerState state in Enum.GetValues(typeof(BrokerState)))
+        {
+            var statePitch = plugin.PitchProvider.PitchForState(patronCtx, state);
+            foreach (var text in statePitch.Lines)
+            {
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                warmedPairs.Add((newPatron.name, text));
+            }
+        }
         _ = Task.Run(async () =>
         {
             foreach (var (speaker, text) in warmedPairs)

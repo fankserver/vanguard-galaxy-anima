@@ -89,3 +89,8 @@ Chain of missions — after reward, broker offers the next link. Needs to track 
 - Don't design the LLM pitch-variation here (that's its own design doc in v0.2).
 - Don't couple chain design to a specific mission generator — the infrastructure should be generator-agnostic.
 - Revisit this doc before any B/C work — the technical landscape may have changed (e.g., game patches, new BepInEx APIs).
+
+## Findings from Phase A playtesting
+
+- **Courier missions auto-complete at the destination station** and pay rewards immediately — the mission never sits in a "CanClaimRewards=true" state at the source station's mission board. Phase A's `ReadyToClaim` state is therefore a no-op for Courier; the observable transition is `InProgress → Done`. Other mission generators (`BountyHunt`, `ClearSalvageField`, etc.) return to the source station for turn-in and do exercise `ReadyToClaim`. Phase B's reward-suppression design needs a per-generator strategy: Courier-class generators have "completion happens at the destination" semantics that the intercept must account for (the mission is already removed from `GamePlayer.current.missions` by the time the player returns to the broker).
+- **Brokers need to "depart" visibly after Done.** Vanilla salesmen are removed from the bar once their transaction resolves; keeping a broker present repeating "Thanks for the work" feels broken. Implemented: Done-state onComplete removes the broker from `bar.availablePatrons` and drops TTS cache. Visual removal happens on the next BarUI refresh.
