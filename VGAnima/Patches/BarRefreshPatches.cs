@@ -106,13 +106,20 @@ internal static class BarRefreshPatches
         foreach (var p in bar.availablePatrons)
             if (plugin.Registry.TryGet(p, out _)) return;
 
+        // Bar.spaceStation is `private` at runtime (publicizer lies) — Traverse it.
+        var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
+        if (station == null) return;
+
+        // Scope: only inject when the player is docked at this station.
+        if (SpaceStation.current != station) return;
+
         // Detect duplicate-seat saved state from older plugin versions that
         // assigned conflicting seats (pre-fix brokers saved into the game's
-        // savegame). The game saves `Bar.availablePatrons`, so stale brokers
-        // persist across reloads. We can't safely auto-remove them (risk of
-        // deleting legitimate same-seat vanilla patrons), but log a warning
-        // so the user knows to advance in-game time for a day-refresh which
-        // clears availablePatrons and lets the current fix take effect.
+        // savegame). `Bar.availablePatrons` is persisted, so stale brokers
+        // survive reloads. We can't safely auto-remove them (risk of deleting
+        // legitimate same-seat vanilla patrons), but log a warning so the
+        // user knows to advance in-game time for a day-refresh, which clears
+        // availablePatrons and lets the current fix take effect.
         var dupSeats = bar.availablePatrons.GroupBy(p => p.seat)
             .Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         var dupNames = bar.availablePatrons.GroupBy(p => p.name)
@@ -126,13 +133,6 @@ internal static class BarRefreshPatches
                 $"Advance in-game time (day-refresh) to clear the bar and let the current fix apply.");
             return;  // Don't pile on another broker; wait for cleanup.
         }
-
-        // Bar.spaceStation is `private` at runtime (publicizer lies) — Traverse it.
-        var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
-        if (station == null) return;
-
-        // Scope: only inject when the player is docked at this station.
-        if (SpaceStation.current != station) return;
 
         // BarUI is a scene MonoBehaviour loaded with SpacestationInterior. Its
         // `patronSprites` list defines the valid (seatIndex, isMale) pairs the
