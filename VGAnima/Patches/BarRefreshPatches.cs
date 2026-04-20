@@ -114,6 +114,15 @@ internal static class BarRefreshPatches
         var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
         if (station == null) return;
 
+        // Scope: only inject at the station the player is currently docked at.
+        // Bar.CheckUpdatePatrons fires galaxy-wide on save load (every station's
+        // bar is re-rolled during initial generation), so without this filter we
+        // spawn a broker in every bar in the universe — most of which the player
+        // will never see, wasting VGTTS warm cycles on unreachable patrons.
+        // Broaden to `station.system == SpaceStation.current?.system` later for
+        // in-system pre-generation during warp.
+        if (SpaceStation.current != station) return;
+
         // Create the new patron. Salesman(SpaceStation) ctor sets the protected
         // spaceStation field. Assign a seat index that isn't already taken.
         var newPatron = new Salesman(station);
