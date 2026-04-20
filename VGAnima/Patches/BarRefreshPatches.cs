@@ -147,6 +147,10 @@ internal static class BarRefreshPatches
         var newPatron = new Salesman(station);
         newPatron.Initialize();
 
+        // Override the random vanilla name so our broker is visually distinct
+        // from any coincidental salesman the seed rolls. _name is public.
+        Traverse.Create(newPatron).Field<string>("_name").Value = "The Mission Broker";
+
         // Pick a seatIndex from patronSprites matching the patron's gender. Prefer
         // one not already used by an existing patron of the same gender (the UI
         // filters sprites by both seat AND isMale, and each seat/gender slot
@@ -166,6 +170,16 @@ internal static class BarRefreshPatches
             .Select(p => p.seat));
         var freeSeats = genderSeats.Where(s => !usedByGender.Contains(s)).ToList();
         newPatron.seat = freeSeats.Count > 0 ? freeSeats[0] : genderSeats[0];
+
+        // Diagnostic: dump the seat/sprite state so we can verify the choice
+        // against what BarUI actually renders. Remove once the broker reliably
+        // shows up in-game.
+        var maleSeats = sprites.Where(s => s.isMale).Select(s => s.seatIndex).Distinct().OrderBy(x => x).ToArray();
+        var femaleSeats = sprites.Where(s => !s.isMale).Select(s => s.seatIndex).Distinct().OrderBy(x => x).ToArray();
+        var existing = string.Join(", ", bar.availablePatrons.Select(p => $"{p.name}/seat{p.seat}/M={p.isMale}"));
+        Plugin.Log.LogInfo(
+            $"[vganima] patronSprites: male seats=[{string.Join(",", maleSeats)}]  female seats=[{string.Join(",", femaleSeats)}]");
+        Plugin.Log.LogInfo($"[vganima] existing patrons: [{existing}]");
 
         // Generate the real game mission.
         var ctx = new MissionContext(station, station.level, newPatron);
