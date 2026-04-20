@@ -71,7 +71,11 @@ internal static class BarPatronPatches
             return;
         }
 
-        // 2. Inject into the station's mission board (unconditional Add — the
+        // 2. Tag the mission name so the player can spot our injections on the
+        // board. Mission.name is a public field so direct assignment works.
+        mission.name = $"[VGA] {mission.name}";
+
+        // 3. Inject into the station's mission board (unconditional Add — the
         // next timer-based RegenerateMissions clears the list anyway).
         if (station.missionBoard != null)
         {
