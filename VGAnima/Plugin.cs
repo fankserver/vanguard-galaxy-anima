@@ -56,6 +56,8 @@ public class Plugin : BaseUnityPlugin
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
+        _harmony.PatchAll(typeof(BarUIDebugPatches));
+        _harmony.PatchAll(typeof(BarPatronImageDebugPatches));
 
         Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} patches)");
     }

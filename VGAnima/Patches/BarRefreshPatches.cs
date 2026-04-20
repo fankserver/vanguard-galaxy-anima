@@ -170,7 +170,12 @@ internal static class BarRefreshPatches
         // exclude seats already taken by ANY patron, not just same-gender ones.
         var usedByAny = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
         var freeSeats = genderSeats.Where(s => !usedByAny.Contains(s)).ToList();
-        newPatron.seat = freeSeats.Count > 0 ? freeSeats[0] : genderSeats[0];
+        var chosenByFallback = freeSeats.Count == 0;
+        newPatron.seat = chosenByFallback ? genderSeats[0] : freeSeats[0];
+        Plugin.Log.LogInfo(
+            $"[vganima] Seat pick: genderSeats=[{string.Join(",", genderSeats)}]  " +
+            $"usedByAny=[{string.Join(",", usedByAny)}]  free=[{string.Join(",", freeSeats)}]  " +
+            $"chose={newPatron.seat}{(chosenByFallback ? " (fallback!)" : "")}");
 
         // Diagnostic: dump the seat/sprite state so we can verify the choice
         // against what BarUI actually renders. Remove once the broker reliably
@@ -229,5 +234,64 @@ internal static class BarRefreshPatches
         Plugin.Log.LogInfo(
             $"[vganima] Added mission broker '{newPatron.name}' to bar at '{station.name}' " +
             $"(seat {newPatron.seat}, isMale={newPatron.isMale}, {bar.availablePatrons.Count} patrons total)");
+
+        // Verify: the broker should now be in the list.
+        var postRoster = string.Join(", ", bar.availablePatrons
+            .Select((p, i) => $"[{i}] {p.name}/seat{p.seat}/M={p.isMale}"));
+        Plugin.Log.LogInfo($"[vganima] Post-inject bar.availablePatrons: {postRoster}");
+    }
+}
+
+/// <summary>
+/// Debug patches on <see cref="BarUI.RefreshPatrons"/> and
+/// <see cref="BarPatronImage.SetPatronSprite"/> to see what the UI actually
+/// instantiates vs. what's in the patron list. Remove once the broker reliably
+/// renders in the bar.
+/// </summary>
+[HarmonyPatch(typeof(BarUI))]
+internal static class BarUIDebugPatches
+{
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(BarUI.RefreshPatrons))]
+    private static void RefreshPatrons_Postfix()
+    {
+        try
+        {
+            var station = SpaceStation.current;
+            if (station?.bar == null) { Plugin.Log.LogInfo("[vganima] BarUI.RefreshPatrons ran with no current station"); return; }
+            var roster = string.Join(", ", station.bar.availablePatrons
+                .Select((p, i) => $"[{i}] {p.name}/seat{p.seat}/M={p.isMale}"));
+            Plugin.Log.LogInfo($"[vganima] BarUI.RefreshPatrons finished — list: {roster}");
+        }
+        catch (Exception ex) { Plugin.Log.LogError($"[vganima] RefreshPatrons_Postfix threw: {ex}"); }
+    }
+}
+
+[HarmonyPatch(typeof(BarPatronImage))]
+internal static class BarPatronImageDebugPatches
+{
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(BarPatronImage.SetPatronData))]
+    private static void SetPatronData_Postfix(BarPatron patron)
+    {
+        try
+        {
+            Plugin.Log.LogInfo(
+                $"[vganima] BarUI instantiated prefab for: {patron?.name}/seat{patron?.seat}/M={patron?.isMale}");
+        }
+        catch (Exception ex) { Plugin.Log.LogError($"[vganima] SetPatronData_Postfix threw: {ex}"); }
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(BarPatronImage.SetPatronSprite))]
+    private static void SetPatronSprite_Postfix(BarPatronImage __instance)
+    {
+        try
+        {
+            var patron = Traverse.Create(__instance).Field<BarPatron>("patron").Value;
+            Plugin.Log.LogInfo(
+                $"[vganima] SetPatronSprite invoked for: {patron?.name}/seat{patron?.seat}/M={patron?.isMale}");
+        }
+        catch (Exception ex) { Plugin.Log.LogError($"[vganima] SetPatronSprite_Postfix threw: {ex}"); }
     }
 }
