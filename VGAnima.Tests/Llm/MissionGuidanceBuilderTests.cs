@@ -24,11 +24,11 @@ public class MissionGuidanceBuilderTests
         {
             PrimaryShip = new LlmShipSnapshot(
                 Name: "X", Faction: "Player", Level: 1,
-                HullPct: 100, ShieldPct: 100, CargoUsedPct: 0),
+                HullPct: 100, ShieldPct: 100, CargoUsedPct: 0,
+                HasCombatLoadout: false, HasMiningLoadout: false, HasSalvageLoadout: false),
             StoredShips = new List<LlmStoredShipSnapshot>(),
             Crew        = new List<LlmCrewSnapshot>(),
         },
-        CargoContents = new List<LlmCargoSnapshot>(),
         Location = new LlmLocationSection
         {
             CurrentStation = "Test", StationFaction = "Blue",
@@ -104,74 +104,43 @@ public class MissionGuidanceBuilderTests
     }
 
     [Fact]
-    public void Build_GatlingAmmoInCargo_RanksCombatFirst()
+    public void Build_CombatLoadout_RanksCombatFirst()
     {
+        // Capability signal — primary ship has offensive hardpoints mounted.
+        // Authoritative combat signal per vanilla SpaceShipData.HasLoadout.
         var ctx = NewContext();
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@GatlingAmmo", 600) };
+        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { HasCombatLoadout = true };
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        var top = g.ArchetypeWeights.First().Key;
-        Assert.Equal("combat", top);
+        Assert.Equal("combat", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
-    public void Build_PlasmaCellInCargo_GivesNoArchetypeSignal()
+    public void Build_MiningLoadout_RanksGatherFirst()
     {
-        // Plasma cells are universal fuel — every ship burns them. NOT a
-        // mining tool. Regression guard: a miner without other mining signals
-        // should NOT be pushed toward gather just because they have fuel.
         var ctx = NewContext();
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@PlasmaCellName", 6) };
-        var g = MissionGuidanceBuilder.Build(ctx);
-
-        Assert.DoesNotContain(g.Rationale, r => r.Contains("PlasmaCell"));
-    }
-
-    [Fact]
-    public void Build_PoiBeaconInCargo_GivesNoArchetypeSignal()
-    {
-        // POI beacons are waypoint bookmarks — used equally for combat /
-        // exploration / salvage / mining. No archetype signal.
-        var ctx = NewContext();
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@PoiBeaconName", 1) };
-        var g = MissionGuidanceBuilder.Build(ctx);
-
-        Assert.DoesNotContain(g.Rationale, r => r.Contains("PoiBeacon"));
-    }
-
-    [Fact]
-    public void Build_MiningExplosivesInCargo_RanksGatherFirst()
-    {
-        // MiningExplosives IS unambiguously mining-specific — keep as a strong
-        // gather signal.
-        var ctx = NewContext();
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@MiningExplosives", 100) };
+        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { HasMiningLoadout = true };
         var g = MissionGuidanceBuilder.Build(ctx);
 
         Assert.Equal("gather", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
-    public void Build_SalvagePartsInCargo_RanksSalvageFirst()
+    public void Build_SalvageLoadout_RanksSalvageFirst()
     {
         var ctx = NewContext();
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@SalvageParts", 5) };
+        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { HasSalvageLoadout = true };
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        var top = g.ArchetypeWeights.First().Key;
-        Assert.Equal("salvage", top);
+        Assert.Equal("salvage", g.ArchetypeWeights.First().Key);
     }
 
-    [Fact]
-    public void Build_TradeGoodsInCargo_RanksDeliverFirst()
-    {
-        var ctx = NewContext();
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@TradeGoods01", 10) };
-        var g = MissionGuidanceBuilder.Build(ctx);
-
-        var top = g.ArchetypeWeights.First().Key;
-        Assert.Equal("deliver", top);
-    }
+    // Cargo-item classification was removed 2026-04-21 — a bar-broker NPC
+    // cannot see into the player's hold. Capability signals (hardpoints,
+    // specialization, titles, active missions, facilities) carry the
+    // archetype decision. The earlier cargo tests (plasma cell / poi beacon
+    // / gatling ammo / salvage parts / trade goods) have been removed with
+    // the classifier. See MissionGuidanceBuilder historical note.
 
     [Fact]
     public void Build_OffenseSpec_RanksCombatFirst()
@@ -299,9 +268,11 @@ public class MissionGuidanceBuilderTests
     public void Build_DamagedShip_BoostsCombat()
     {
         var ctx = NewContext();
-        ctx.Fleet.PrimaryShip = new LlmShipSnapshot(
-            Name: "Wreck", Faction: "Player", Level: 1,
-            HullPct: 45, ShieldPct: 10, CargoUsedPct: 0);
+        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with
+        {
+            HullPct   = 45,
+            ShieldPct = 10,
+        };
         var g = MissionGuidanceBuilder.Build(ctx);
 
         Assert.Equal("combat", g.ArchetypeWeights.First().Key);
@@ -311,9 +282,7 @@ public class MissionGuidanceBuilderTests
     public void Build_FullCargo_BoostsDeliver()
     {
         var ctx = NewContext();
-        ctx.Fleet.PrimaryShip = new LlmShipSnapshot(
-            Name: "Hauler", Faction: "Player", Level: 5,
-            HullPct: 100, ShieldPct: 100, CargoUsedPct: 85);
+        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { CargoUsedPct = 85 };
         var g = MissionGuidanceBuilder.Build(ctx);
 
         // Full cargo alone is Medium(1) — competes against the even-fallback base;
@@ -342,16 +311,13 @@ public class MissionGuidanceBuilderTests
     [Fact]
     public void Build_OffenseWithAmmoAndNavyTitle_StronglyCombat()
     {
-        // The exact scenario that failed in live testing (Glass Revelation
-        // Array): specialization=Offense, @GatlingAmmo cargo, navycaptain title.
-        // The builder must rank combat overwhelmingly.
+        // The live-testing scenario (Glass Revelation Array):
+        // specialization=Offense, navycaptain title, ship with combat
+        // hardpoints mounted. The builder must rank combat overwhelmingly.
         var ctx = NewContext();
         ctx.Player.Specialization = "Offense";
         ctx.Player.UnlockedTitles = new[] { "navycaptain" };
-        ctx.CargoContents = new List<LlmCargoSnapshot>
-        {
-            new("@GatlingAmmo", 600), new("@PlasmaCellName", 1),
-        };
+        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { HasCombatLoadout = true };
         var g = MissionGuidanceBuilder.Build(ctx);
 
         var top = g.ArchetypeWeights.First().Key;
@@ -377,7 +343,6 @@ public class MissionGuidanceBuilderTests
     {
         var ctx = NewContext();
         ctx.Player.Specialization = "Mining";
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@OreCommon13", 25) };
         var g = MissionGuidanceBuilder.Build(ctx);
 
         var sum = g.ArchetypeWeights.Values.Sum();
@@ -389,7 +354,6 @@ public class MissionGuidanceBuilderTests
     {
         var ctx = NewContext();
         ctx.Player.Specialization = "Mining";
-        ctx.CargoContents = new List<LlmCargoSnapshot> { new("@PlasmaCellName", 1) };
         var g = MissionGuidanceBuilder.Build(ctx);
 
         var values = g.ArchetypeWeights.Values.ToList();

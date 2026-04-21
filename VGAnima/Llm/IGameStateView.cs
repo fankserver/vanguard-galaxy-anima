@@ -34,9 +34,6 @@ internal interface IGameStateView
     IReadOnlyList<LlmStoredShipSnapshot> StoredShips { get; }
     IReadOnlyList<LlmCrewSnapshot> Crew { get; }
 
-    // Cargo
-    IReadOnlyList<LlmCargoSnapshot> CargoContents { get; }
-
     // Location section
     string CurrentStationName { get; }
     string StationFaction { get; }

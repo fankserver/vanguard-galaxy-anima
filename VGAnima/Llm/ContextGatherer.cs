@@ -42,7 +42,6 @@ internal sealed class ContextGatherer
                 StoredShips = view.StoredShips.Take(10).ToList(),
                 Crew        = view.Crew.Take(10).ToList(),
             },
-            CargoContents = view.CargoContents,
             Location = new LlmLocationSection
             {
                 CurrentStation    = view.CurrentStationName,

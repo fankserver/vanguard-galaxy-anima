@@ -14,7 +14,6 @@ internal sealed class LlmContext
 {
     [JsonProperty("player")]       public LlmPlayerSection   Player       { get; set; } = null!;
     [JsonProperty("fleet")]        public LlmFleetSection    Fleet        { get; set; } = null!;
-    [JsonProperty("cargo_contents")] public IReadOnlyList<LlmCargoSnapshot> CargoContents { get; set; } = null!;
     [JsonProperty("location")]     public LlmLocationSection Location     { get; set; } = null!;
     /// <summary>Unified per-faction snapshot: identifier → (display_name,
     /// relation, reputation). Replaces the earlier trio of <c>reputation</c> /
@@ -72,7 +71,15 @@ internal sealed record LlmShipSnapshot(
     [property: JsonProperty("level")]         int Level,
     [property: JsonProperty("hull_pct")]      int HullPct,
     [property: JsonProperty("shield_pct")]    int ShieldPct,
-    [property: JsonProperty("cargo_used_pct")] int CargoUsedPct);
+    [property: JsonProperty("cargo_used_pct")] int CargoUsedPct,
+    // Hardpoint-derived loadout flags — the game's own HasLoadout check
+    // (reads turrets + drone bay + torpedo bay, classified by the
+    // GameplayType the mounted items declare). Authoritative "is this ship
+    // equipped to do X right now" signal; honest even when the player has
+    // mining tools mounted on a nominally-combat hull or vice versa.
+    [property: JsonProperty("has_combat_loadout")]  bool HasCombatLoadout,
+    [property: JsonProperty("has_mining_loadout")]  bool HasMiningLoadout,
+    [property: JsonProperty("has_salvage_loadout")] bool HasSalvageLoadout);
 
 internal sealed record LlmStoredShipSnapshot(
     [property: JsonProperty("name")]      string Name,
@@ -83,10 +90,6 @@ internal sealed record LlmStoredShipSnapshot(
 internal sealed record LlmCrewSnapshot(
     [property: JsonProperty("name")]      string Name,
     [property: JsonProperty("role_hint")] string RoleHint);
-
-internal sealed record LlmCargoSnapshot(
-    [property: JsonProperty("item")]  string Item,
-    [property: JsonProperty("count")] int Count);
 
 internal sealed class LlmLocationSection
 {

@@ -24,10 +24,10 @@ public class ContextGathererTests
 
         public LlmShipSnapshot? PrimaryShip { get; set; } = new(
             Name: "Vanguard-X", Faction: "Player", Level: 14,
-            HullPct: 85, ShieldPct: 100, CargoUsedPct: 60);
+            HullPct: 85, ShieldPct: 100, CargoUsedPct: 60,
+            HasCombatLoadout: false, HasMiningLoadout: false, HasSalvageLoadout: false);
         public IReadOnlyList<LlmStoredShipSnapshot> StoredShips { get; set; } = new List<LlmStoredShipSnapshot>();
         public IReadOnlyList<LlmCrewSnapshot> Crew { get; set; } = new List<LlmCrewSnapshot>();
-        public IReadOnlyList<LlmCargoSnapshot> CargoContents { get; set; } = new List<LlmCargoSnapshot>();
 
         public string CurrentStationName { get; set; } = "Spire XIV";
         public string StationFaction { get; set; } = "TradingGuild";

@@ -3,6 +3,7 @@ using System.Linq;
 using Source.Galaxy;
 using Source.Galaxy.POI;
 using Source.Player;
+using Source.Util;
 
 namespace VGAnima.Llm;
 
@@ -81,12 +82,15 @@ internal sealed class GameStateView : IGameStateView
             var capacity = ship.cargoCapacity;
             var cargoPct = capacity > 0f ? (int)(100f * ship.cargoUsed / capacity) : 0;
             return new LlmShipSnapshot(
-                Name:         ship.name ?? string.Empty,
-                Faction:      ship.faction?.identifier ?? string.Empty,
-                Level:        ship.level,
-                HullPct:      hullPct,
-                ShieldPct:    shieldPct,
-                CargoUsedPct: cargoPct);
+                Name:              ship.name ?? string.Empty,
+                Faction:           ship.faction?.identifier ?? string.Empty,
+                Level:             ship.level,
+                HullPct:           hullPct,
+                ShieldPct:         shieldPct,
+                CargoUsedPct:      cargoPct,
+                HasCombatLoadout:  ship.HasLoadout(GameplayType.Combat),
+                HasMiningLoadout:  ship.HasLoadout(GameplayType.Mining),
+                HasSalvageLoadout: ship.HasLoadout(GameplayType.Salvage));
         }
     }
 
@@ -137,23 +141,6 @@ internal sealed class GameStateView : IGameStateView
         if (callsign != null) parts.Add(callsign);
         if (!string.IsNullOrEmpty(c.lastName))  parts.Add(c.lastName);
         return string.Join(" ", parts);
-    }
-
-    public IReadOnlyList<LlmCargoSnapshot> CargoContents
-    {
-        get
-        {
-            var ship = GamePlayer.current?.currentSpaceShip;
-            if (ship == null) return new List<LlmCargoSnapshot>();
-            var list = new List<LlmCargoSnapshot>();
-            foreach (var entry in ship.cargo.items)
-            {
-                list.Add(new LlmCargoSnapshot(
-                    Item:  entry.item?.displayName ?? string.Empty,
-                    Count: entry.count));
-            }
-            return list;
-        }
     }
 
     public string CurrentStationName

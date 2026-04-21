@@ -47,14 +47,14 @@ internal static class MissionGuidanceBuilder
         };
         var rationale = new List<string>();
 
-        ApplyCargoSignals      (ctx, raw, rationale);
+        ApplyHardpointSignals    (ctx, raw, rationale);
         ApplySpecializationSignals(ctx, raw, rationale);
-        ApplyTitleSignals      (ctx, raw, rationale);
-        ApplyLadderSignals     (ctx, raw, rationale);
+        ApplyTitleSignals        (ctx, raw, rationale);
+        ApplyLadderSignals       (ctx, raw, rationale);
         ApplyActiveMissionSignals(ctx, raw, rationale);
-        ApplyFacilitySignals   (ctx, raw, rationale);
-        ApplyShipStateSignals  (ctx, raw, rationale);
-        ApplyFactionSignals    (ctx, raw, rationale);
+        ApplyFacilitySignals     (ctx, raw, rationale);
+        ApplyShipStateSignals    (ctx, raw, rationale);
+        ApplyFactionSignals      (ctx, raw, rationale);
 
         var forbidden = DetermineForbidden(ctx, rationale);
         foreach (var f in forbidden) raw[f] = 0.0;
@@ -78,36 +78,31 @@ internal static class MissionGuidanceBuilder
 
     // ---- signal functions ----
 
-    private static void ApplyCargoSignals(LlmContext ctx, Dictionary<string, double> raw, List<string> rationale)
+    /// <summary>Combat/mining/salvage capability signal read from the primary
+    /// ship's currently-mounted hardpoints via the game's own
+    /// <c>SpaceShipData.HasLoadout</c> check. This is the authoritative "is
+    /// this ship equipped to do X right now" signal — honest even when a
+    /// nominally-combat hull has mining tools mounted (or vice versa).
+    /// Replaces the old cargo-ammo heuristic, which was unreliable (ammo
+    /// stockpiling, empty-after-fight, trading ammo as freight).</summary>
+    private static void ApplyHardpointSignals(LlmContext ctx, Dictionary<string, double> raw, List<string> rationale)
     {
-        foreach (var entry in ctx.CargoContents)
+        var ship = ctx.Fleet?.PrimaryShip;
+        if (ship == null) return;
+        if (ship.HasCombatLoadout)
         {
-            var item = entry.Item ?? string.Empty;
-            if (IsCombatAmmo(item))
-            {
-                raw[Combat] += VeryStrong;
-                rationale.Add($"cargo contains {item} (combat loadout) → combat");
-            }
-            else if (IsMiningTool(item))
-            {
-                raw[Gather] += VeryStrong;
-                rationale.Add($"cargo contains {item} (mining tool) → gather");
-            }
-            else if (IsOreOutput(item))
-            {
-                raw[Gather] += VeryStrong;
-                rationale.Add($"cargo contains {item} (ore output) → gather");
-            }
-            else if (IsSalvageOutput(item))
-            {
-                raw[Salvage] += VeryStrong;
-                rationale.Add($"cargo contains {item} (salvage output) → salvage");
-            }
-            else if (IsTradeGoods(item))
-            {
-                raw[Deliver] += VeryStrong;
-                rationale.Add($"cargo contains {item} (trade goods) → deliver");
-            }
+            raw[Combat] += VeryStrong;
+            rationale.Add("primary ship has combat hardpoints mounted → combat");
+        }
+        if (ship.HasMiningLoadout)
+        {
+            raw[Gather] += VeryStrong;
+            rationale.Add("primary ship has mining hardpoints mounted → gather");
+        }
+        if (ship.HasSalvageLoadout)
+        {
+            raw[Salvage] += VeryStrong;
+            rationale.Add("primary ship has salvage hardpoints mounted → salvage");
         }
     }
 
@@ -347,31 +342,15 @@ internal static class MissionGuidanceBuilder
 
     private static double Round2(double v) => System.Math.Round(v, 2);
 
-    // ---- item classification heuristics ----
-    //
-    // Items arrive as @-prefixed translation keys (e.g. "@GatlingAmmo"). Exact
-    // identifier strings are not enumerated in a central place — we pattern-match
-    // on naming conventions observed in live game logs. Tighten when false
-    // positives surface.
-
-    private static bool IsCombatAmmo(string item) =>
-        item.Contains("Ammo") || item.Contains("Missile") ||
-        item.Contains("Torpedo") || item.Contains("Railcannon");
-
-    private static bool IsMiningTool(string item) =>
-        // MiningExplosives is the only unambiguously mining-specific cargo item
-        // in the live game. Plasma cells are universal fuel (every ship uses
-        // them). POI beacons are waypoint markers used for combat / exploration
-        // / salvage / mining equally — no archetype signal.
-        item.Contains("MiningExplosives");
-
-    private static bool IsOreOutput(string item) =>
-        item.Contains("Ore") || item.Contains("Crystal");
-
-    private static bool IsSalvageOutput(string item) =>
-        item.Contains("Scrap") || item.Contains("SalvageParts") ||
-        item.Contains("Debris");
-
-    private static bool IsTradeGoods(string item) =>
-        item.Contains("TradeGoods") || item.Contains("RefinedProduct");
+    // Historical note: cargo-item classification was tried and removed
+    // 2026-04-21. A broker NPC can't see into a player's hold any more than
+    // they can see a bank balance; the inferred "mining tool" / "ore output"
+    // / "trade goods" signals were narratively wrong AND technically fragile
+    // (pattern-matching on @-prefixed display-name strings with no
+    // canonical prefix convention — only @OreCommon* was evidence-backed).
+    // Capability signals (hardpoints, specialization, titles, active
+    // missions, station facilities) carry the archetype decision honestly.
+    // Future: a proper station-interaction history (refinery use, workshop
+    // use, trade-terminal use) would be observable to a broker — out of
+    // scope for this milestone.
 }

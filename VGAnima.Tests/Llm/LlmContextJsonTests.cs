@@ -29,7 +29,7 @@ public class LlmContextJsonTests
         // Every v1-spec top-level key must survive the roundtrip.
         foreach (var key in new[]
         {
-            "player", "fleet", "cargo_contents", "location",
+            "player", "fleet", "location",
             "factions", "reward_clamps", "mission_guidance",
             "missions", "story_arcs_active", "waypoints", "time", "broker",
         })
@@ -154,7 +154,6 @@ public class LlmContextJsonTests
                 StoredShips = new List<LlmStoredShipSnapshot>(),
                 Crew = new List<LlmCrewSnapshot>(),
             },
-            CargoContents = new List<LlmCargoSnapshot>(),
             Location = new LlmLocationSection
             {
                 CurrentStation = "test",
