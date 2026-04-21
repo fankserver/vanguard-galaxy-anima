@@ -75,7 +75,9 @@ internal static class MissionFactoryFromJson
             var step = new MissionStep();
             if (brokerStation != null) step.system = brokerStation.system;
             foreach (var objBlock in stepBlock.Objectives)
-                step.objectives.Add(BuildObjective(objBlock, step, brokerStation));
+                step.objectives.Add(BuildObjective(
+                    objBlock, step, brokerStation, missionLevel,
+                    sourceFaction: mission.sourceFaction));
             mission.steps.Add(step);
         }
 
@@ -136,7 +138,8 @@ internal static class MissionFactoryFromJson
     /// (<see href="BountyHunt.GenerateMission"/>) for "fly to a spot on the
     /// map and clear it" missions.</summary>
     private static MissionObjective BuildObjective(
-        LlmObjective block, MissionStep step, SpaceStation? brokerStation)
+        LlmObjective block, MissionStep step, SpaceStation? brokerStation, int missionLevel,
+        Faction sourceFaction)
     {
         switch (block)
         {
@@ -168,14 +171,10 @@ internal static class MissionFactoryFromJson
                 };
 
             case LlmCollectItemTypes c:
-                return new CollectItemTypes
-                {
-                    itemCategory   = Enum.Parse<ItemCategory>(c.ItemCategory),
-                    requiredAmount = c.RequiredAmount,
-                };
+                return BuildCollectItemTypes(c, step, brokerStation, sourceFaction);
 
             case LlmClearPoi cp:
-                return BuildClearPoi(cp, step, brokerStation);
+                return BuildClearPoi(cp, step, brokerStation, missionLevel);
 
             default:
                 throw new InvalidOperationException(
@@ -189,8 +188,73 @@ internal static class MissionFactoryFromJson
     /// <c>KillEnemies</c> whose <c>requiredAmount</c> is the spawn's
     /// <c>totalUnitCount</c>. The player sees a new icon on the system map,
     /// flies there, and the step auto-completes when the area is clear.</summary>
+    /// <summary>Builds a <see cref="CollectItemTypes"/> objective. For
+    /// categories with a natural POI home (Ore → Mining field, Salvage →
+    /// derelict fleet), also spawns the corresponding POI in the broker's
+    /// system and pins it to the step so the player gets a map waypoint.
+    /// RefinedProduct and TradeGoods don't get a POI — those are acquired
+    /// through refineries / traders, not spawned locations.
+    ///
+    /// <para>The POI type is derived from <see cref="LlmCollectItemTypes.ItemCategory"/>
+    /// rather than let the LLM pick — we've been applying "LLM for
+    /// narrative, code for mechanics" consistently (see ClearPoi +
+    /// MissionGuidance). One mapping table, one place to extend when
+    /// vanilla adds new POI flavors. The <see cref="ItemCategoryWhitelist"/>
+    /// already filters out categories without a POI home.</para>
+    ///
+    /// <para>Faction for the spawned POI is the <b>broker's declared employer</b>
+    /// — vanilla's <c>mission.sourceFaction</c>, which the LLM emitted as
+    /// <c>source_faction</c>. NOT the broker's physical station faction:
+    /// a SalvageGuild broker is sometimes sitting in a MiningGuild bar,
+    /// and their salvage claim should read "SalvageGuild" even then.
+    /// The station just happens to be where they're pitching work; the
+    /// mission's "who owns this site" question is answered by who's
+    /// paying.</para>
+    ///
+    /// <para>Mining POI hazards default to 0 (no anomalies); Salvage POI
+    /// hazard chance defaults to vanilla's 0.5.</para></summary>
+    private static MissionObjective BuildCollectItemTypes(
+        LlmCollectItemTypes block, MissionStep step, SpaceStation? brokerStation,
+        Faction sourceFaction)
+    {
+        var category = Enum.Parse<ItemCategory>(block.ItemCategory);
+
+        if (brokerStation != null)
+        {
+            switch (category)
+            {
+                case ItemCategory.Ore:
+                    // Spawn an asteroid field the player can go mine. Default
+                    // hazard level (0) — adversarial spawns come from vanilla's
+                    // own `pirateChance` logic if enabled; keep it conservative
+                    // for broker missions so "go mine X ore" doesn't secretly
+                    // become a combat encounter.
+                    var mining = brokerStation.system.AddMiningPoi(sourceFaction);
+                    step.dynamicPointOfInterest = mining;
+                    break;
+                case ItemCategory.Salvage:
+                    // Spawn a derelict-fleet debris field. Default ship
+                    // template ("AncientWreck") + vanilla's 0.5 hazard chance.
+                    // Each wreck carries its own item/scrap contents scaled
+                    // to the system level.
+                    var salvage = brokerStation.system.AddDerelictFleetPoi(sourceFaction);
+                    step.dynamicPointOfInterest = salvage;
+                    break;
+                // RefinedProduct / TradeGoods: no POI — player acquires these
+                // through normal trade, not by flying to a spawn. Falls
+                // through with no dynamicPointOfInterest set.
+            }
+        }
+
+        return new CollectItemTypes
+        {
+            itemCategory   = category,
+            requiredAmount = block.RequiredAmount,
+        };
+    }
+
     private static MissionObjective BuildClearPoi(
-        LlmClearPoi block, MissionStep step, SpaceStation? brokerStation)
+        LlmClearPoi block, MissionStep step, SpaceStation? brokerStation, int missionLevel)
     {
         if (brokerStation == null)
             throw new InvalidOperationException(
@@ -198,7 +262,23 @@ internal static class MissionFactoryFromJson
 
         var enemyFaction = Faction.Get(block.EnemyFaction);
         var combat       = brokerStation.system.AddCombat(enemyFaction);
-        combat.AddGuards(combat.CreateUnitPayload(1f, GameplayType.Combat));
+
+        // Scale guard payload with mission level so a "clear the zone"
+        // objective actually plays like a real engagement. A single-unit
+        // spawn (the pre-fix behavior from `CreateUnitPayload(1f, ...)`)
+        // melts in seconds and doesn't match the narrative weight of a
+        // dedicated Combat POI on the system map.
+        //
+        //   L1   →  2.2  (≈2 units)
+        //   L5   →  3.0  (≈3 units)
+        //   L10  →  4.0  (≈4 units)
+        //   L15+ →  5.0  (capped; ≈5 units)
+        //
+        // The clamp caps high-level stations so ClearPoi doesn't become a
+        // war. Vanilla's own spawn logic then scales each unit's ship
+        // level on top of this count.
+        var payloadMultiplier = Math.Clamp(2f + missionLevel * 0.2f, 2f, 5f);
+        combat.AddGuards(combat.CreateUnitPayload(payloadMultiplier, GameplayType.Combat));
         step.dynamicPointOfInterest = combat;
 
         return new KillEnemies

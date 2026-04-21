@@ -10,7 +10,10 @@ namespace VGAnima.Cache;
 ///       — dropped from VGTTS cache when the broker departs.</item>
 ///     <item>The source <see cref="SpaceStation"/> the broker was injected at
 ///       (used for rolloff eviction, departure cleanup, and broker identification
-///       via seed prefix).</item>
+///       via seed prefix). <see cref="StationId"/> is the serializable string form
+///       of the station reference, carried here so persistence
+///       (<see cref="VGAnima.Persistence.PersistedBroker"/>) can roundtrip the
+///       binding without a live <see cref="SpaceStation"/>.</item>
 ///     <item>The unique <c>storyId</c> for this broker's LLM-authored mission.
 ///       Minted by <see cref="VGAnima.Missions.LlmMissionAssigner"/> after the
 ///       LLM call validates and the Mission is built+registered; never rewritten.
@@ -21,25 +24,31 @@ namespace VGAnima.Cache;
 ///       block is already materialized as a live registered Mission; the block
 ///       is kept here only for diagnostics / future save serialization.</item>
 ///   </list>
-/// Not persisted — derived on bar open from the seed prefix; LlmStory dies
-/// with the record (eviction or departure) and is re-synthesised on the next
-/// injection of the same seed.</summary>
+/// Not persisted directly — lives in <see cref="ConversionRegistry"/> during a
+/// session. The sidecar (<see cref="VGAnima.Persistence.SidecarIO"/>) carries
+/// the durable copy.
+/// <para>No <c>DisplayName</c> / <c>IsMale</c> fields: the salesman's vanilla
+/// seed-derived identity is authoritative; VGAnima no longer overrides those
+/// properties, so no in-session cache of them is needed.</para></summary>
 internal sealed class ConversionRecord
 {
     public IReadOnlyList<(string Speaker, string Text)> WarmedLines { get; }
     public SpaceStation Station { get; }
     public string StoryId { get; }
     public LlmStory? LlmStory { get; }
+    public string StationId { get; }
 
     public ConversionRecord(
         IReadOnlyList<(string Speaker, string Text)> warmedLines,
         SpaceStation station,
         string storyId,
-        LlmStory? llmStory = null)
+        LlmStory? llmStory,
+        string stationId)
     {
         WarmedLines = warmedLines;
         Station = station;
         StoryId = storyId;
         LlmStory = llmStory;
+        StationId = stationId;
     }
 }

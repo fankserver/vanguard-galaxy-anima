@@ -19,7 +19,7 @@ namespace VGAnima.Llm;
 /// Archetype set (exactly five; map to objective types in the prompt):
 ///   combat  → ClearPoi (preferred) or KillEnemies
 ///   gather  → CollectItemTypes (Ore / RefinedProduct)
-///   salvage → CollectItemTypes (Salvage / Junk)
+///   salvage → CollectItemTypes (Salvage)
 ///   deliver → TriggerObjective (travel) or CollectItemTypes (TradeGoods)
 ///   escort  → ProtectUnit + TriggerObjective travel</summary>
 internal static class MissionGuidanceBuilder
@@ -53,7 +53,6 @@ internal static class MissionGuidanceBuilder
         ApplyLadderSignals       (ctx, raw, rationale);
         ApplyActiveMissionSignals(ctx, raw, rationale);
         ApplyFacilitySignals     (ctx, raw, rationale);
-        ApplyShipStateSignals    (ctx, raw, rationale);
         ApplyFactionSignals      (ctx, raw, rationale);
 
         var forbidden = DetermineForbidden(ctx, rationale);
@@ -254,22 +253,6 @@ internal static class MissionGuidanceBuilder
         {
             raw[Deliver] += Weak;
             rationale.Add("station facility Shipyard → deliver (weak)");
-        }
-    }
-
-    private static void ApplyShipStateSignals(LlmContext ctx, Dictionary<string, double> raw, List<string> rationale)
-    {
-        var ship = ctx.Fleet?.PrimaryShip;
-        if (ship == null) return;
-        if (ship.HullPct < 70 || ship.ShieldPct < 50)
-        {
-            raw[Combat] += Medium;
-            rationale.Add($"ship damaged (hull={ship.HullPct}%, shield={ship.ShieldPct}%) → combat (recent action)");
-        }
-        if (ship.CargoUsedPct >= 60)
-        {
-            raw[Deliver] += Medium;
-            rationale.Add($"cargo_used_pct={ship.CargoUsedPct} (mostly full) → deliver");
         }
     }
 

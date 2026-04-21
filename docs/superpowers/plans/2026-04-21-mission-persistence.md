@@ -41,6 +41,14 @@
 | `VGAnima.Tests/Persistence/OrphanPurgerTests.cs` | **Create** |
 | `VGAnima.Tests/Missions/PlaceholderMissionTests.cs` | **Create** |
 
+**Implementation deviations from the layout above:**
+- `VGAnima/Persistence/ISaveContext.cs` not created; the "current active save path" abstraction was folded into static fields `SaveLoadPatch.LastKnownSavePath` / `SaveWritePatch.LastKnownSavePath` (read by `Plugin.OnAppQuitting`). One less indirection, same semantics.
+- `VGAnima/Persistence/VGAnimaSidecarSerializationBinder.cs` added (not in the original layout). Locks down `TypeNameHandling.Auto` via an allowlist — raised by code review during T2 and delivered in T4.
+- `VGAnima/Persistence/IClock.cs` + `GameClock.cs` added (not in the original layout but listed in Task 10 steps). Injectable time abstraction for tests.
+- `VGAnima/Persistence/DeadSidecarSweeper.cs` added (listed in Task 15 steps, not in top table). Startup sweep of orphaned sidecars.
+- `VGAnima.Tests/Missions/PlaceholderMissionTests.cs` added (not in table).
+- T8 "MissionFactoryFromJson load-aware path" collapsed to no-op: scout finding #6 confirmed vanilla doesn't re-invoke the factory on load (missions restore from their own serialized fields). No code change needed.
+
 ---
 
 ## Task 1: Scout vanilla save/load API

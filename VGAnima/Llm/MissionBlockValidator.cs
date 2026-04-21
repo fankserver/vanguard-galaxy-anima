@@ -16,15 +16,28 @@ namespace VGAnima.Llm;
 /// <see cref="LlmContext"/> that was sent to the LLM.</summary>
 internal sealed class MissionBlockValidator
 {
-    private const int NameMaxLen           = 60;
-    private const int DescriptionMaxLen    = 500;
-    private const int CompletionTextMaxLen = 200;
+    // Hard max lengths — enforced by the validator; input over these bounces.
+    // Exposed as internal so the prompt builder can reference the soft
+    // counterparts below.
+    internal const int NameMaxLen           = 60;
+    internal const int DescriptionMaxLen    = 500;
+    internal const int CompletionTextMaxLen = 200;
     // Bumped from 80 → 120 after live testing: naturally-written objective
     // descriptions land at 84–100 chars regularly ("Travel to the hostile
     // signature and destroy all Corsair Syndicate ships in the area." = 84).
     // 120 matches the dialogue-line limit so there's one budget to remember.
-    private const int ObjDescriptionMaxLen = 120;
-    private const int ProtectTextMaxLen    = 120;
+    internal const int ObjDescriptionMaxLen = 120;
+    internal const int ProtectTextMaxLen    = 120;
+
+    // Soft max lengths — advertised in the prompt. ~10% under the hard
+    // limit gives the LLM headroom so occasional miscount-by-a-few-chars
+    // still fits under the validator. Integer math rounds down, which is
+    // what we want (never exceed the hard limit, even after rounding).
+    internal const int NameSoftMaxLen           = NameMaxLen           * 9 / 10;  // 54
+    internal const int DescriptionSoftMaxLen    = DescriptionMaxLen    * 9 / 10;  // 450
+    internal const int CompletionTextSoftMaxLen = CompletionTextMaxLen * 9 / 10;  // 180
+    internal const int ObjDescriptionSoftMaxLen = ObjDescriptionMaxLen * 9 / 10;  // 108
+    internal const int ProtectTextSoftMaxLen    = ProtectTextMaxLen    * 9 / 10;  // 108
 
     private const int KillRequiredMin      = 1;
     private const int KillRequiredMax      = 5;

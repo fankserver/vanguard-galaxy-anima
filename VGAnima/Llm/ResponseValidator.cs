@@ -27,6 +27,12 @@ internal sealed class ResponseValidator
     public const string ExpectedSchemaV1 = "vganima/story/v1";
     public const string ExpectedSchemaV2 = "vganima/mission/v1";
 
+    // Dialogue line char budget — shared by pitch / check_in / payout.
+    // Hard limit is enforced here; the soft limit (~10% under) is what
+    // the prompt advertises so the LLM has headroom for miscounts.
+    internal const int DialogueLineMaxLen     = 120;
+    internal const int DialogueLineSoftMaxLen = DialogueLineMaxLen * 9 / 10;  // 108
+
     private static readonly HashSet<string> DialogueKeys = new()
     {
         "schema", "pitch", "check_in", "payout",
@@ -142,9 +148,9 @@ internal sealed class ResponseValidator
             throw new LlmValidationException(
                 $"field `{fieldName}`[{index}] must be non-empty after trim");
 
-        if (s.Length > 120)
+        if (s.Length > DialogueLineMaxLen)
             throw new LlmValidationException(
-                $"field `{fieldName}`[{index}] exceeds max length 120 (got {s.Length})");
+                $"field `{fieldName}`[{index}] exceeds max length {DialogueLineMaxLen} (got {s.Length})");
 
         if (s.Length != s.Trim().Length)
             throw new LlmValidationException(

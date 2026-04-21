@@ -14,6 +14,7 @@ using Source.Galaxy.POI.Station.Patrons;
 using VGAnima.Cache;
 using VGAnima.Llm;
 using VGAnima.Missions;
+using VGAnima.Persistence;
 using VGAnima.Pitch;
 using UObject = UnityEngine.Object;
 
@@ -41,12 +42,49 @@ internal static class BarRefreshPatches
     /// a full game restart.</summary>
     public const string BrokerSeedPrefix = "vganima-broker-";
 
+    /// <summary>Wired by <see cref="Plugin.Awake"/> to the shared
+    /// <see cref="PersistedBrokerRegistry"/> singleton (same one
+    /// <see cref="SaveLoadPatch"/> / <see cref="SaveWritePatch"/> use).
+    /// Null outside prod / pre-T15 integration — <see cref="IsActive"/>
+    /// then falls through to the vanilla mission-list check alone.</summary>
+    public static PersistedBrokerRegistry? PersistedRegistry;
+
     /// <summary>Procedural voice defaults — match VGTTS's own defaults so mod
     /// load order doesn't change perceived voice.</summary>
     private const string ProceduralMaleVoice   = "kokoro:12";
     private const string ProceduralFemaleVoice = "kokoro:9";
 
     private static readonly ConditionalWeakTable<Bar, List<BarPatron>> _snapshots = new();
+
+    /// <summary>In-flight injection guard. The LLM dispatch is async, so two
+    /// MissionChance rolls for the same station in rapid succession can both
+    /// start injecting before either finishes. The existing "broker already
+    /// present" check only sees patrons already added to the bar — a broker
+    /// whose LLM call hasn't returned yet isn't visible. Guarded by a HashSet
+    /// of station guids keyed on entry; released on every exit path of
+    /// <see cref="DispatchAsync"/> and <see cref="FinalizeBrokerInjection"/>.
+    /// The lock is cheap because contention is ~one claim per potential
+    /// injection.</summary>
+    private static readonly HashSet<string> _injectionsInFlight = new();
+    private static readonly object _injectionsInFlightLock = new();
+
+    private static bool TryClaimInjection(string stationGuid)
+    {
+        lock (_injectionsInFlightLock)
+        {
+            if (_injectionsInFlight.Contains(stationGuid)) return false;
+            _injectionsInFlight.Add(stationGuid);
+            return true;
+        }
+    }
+
+    private static void ReleaseInjection(string stationGuid)
+    {
+        lock (_injectionsInFlightLock)
+        {
+            _injectionsInFlight.Remove(stationGuid);
+        }
+    }
 
     /// <summary>Brokers whose assigned storyId is still in flight — snapshotted
     /// in the prefix, restored in the postfix so daily rollover doesn't delete
@@ -65,7 +103,21 @@ internal static class BarRefreshPatches
         foreach (var p in __instance.availablePatrons)
         {
             if (!plugin.Registry.TryGet(p, out var record)) continue;
-            if (IsActive(record, plugin.PlayerView)) pinned.Add(p);
+            if (IsActive(record, plugin.PlayerView, PersistedRegistry))
+            {
+                pinned.Add(p);
+                // Bump lastSeen on the persisted entry so a future pruning policy
+                // (TTL/LRU) sees fresh activity whenever the bar re-refreshes over
+                // a registered broker. Spec §5 bullet: "Bar refresh touches a
+                // persisted broker → bump lastSeen timestamps".
+                if (PersistedRegistry is not null && plugin.Clock is not null)
+                {
+                    PersistedRegistry.BumpLastSeen(
+                        record.StoryId,
+                        gameSeconds: plugin.Clock.GameSeconds,
+                        realUtc:     plugin.Clock.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+                }
+            }
         }
         if (pinned.Count > 0) _pinnedBrokers.AddOrUpdate(__instance, pinned);
     }
@@ -85,6 +137,54 @@ internal static class BarRefreshPatches
                 foreach (var p in pinned)
                     if (!__instance.availablePatrons.Contains(p))
                         __instance.availablePatrons.Add(p);
+            }
+
+            // Orphan purge — runs every bar refresh (not one-shot). Offered
+            // entries are scoped to the current bar's station: entries whose
+            // stationId matches the bar we just processed AND whose seed
+            // isn't in this bar's patron list get dropped. Entries for other
+            // stations survive — we can't verify their brokers from here
+            // and premature purging would drop live state (cost of the
+            // earlier one-shot design: loading at Spire XIV purged every
+            // Outrider 3A entry before the player's bar at Outrider 3A
+            // ever got to rehydrate).
+            // Accepted entries are purged globally against vanilla's mission
+            // lists regardless of the current station.
+            if (PersistedRegistry is { } reg && Plugin.Instance is { } plugin)
+            {
+                try
+                {
+                    // Bar.spaceStation is private — mirror the Traverse pattern used
+                    // by StartInjectMissionBroker below.
+                    var station = Traverse.Create(__instance).Field<SpaceStation>("spaceStation").Value;
+                    var currentStationId = station?.guid;
+
+                    var activeIds   = new List<string>();
+                    var archivedIds = new List<string>();
+                    foreach (var entry in reg.All())
+                    {
+                        if (plugin.PlayerView.GetActive(entry.StoryId) is not null)
+                            activeIds.Add(entry.StoryId);
+                        else if (plugin.PlayerView.IsArchived(entry.StoryId))
+                            archivedIds.Add(entry.StoryId);
+                    }
+
+                    var seeds = new List<string>();
+                    foreach (var patron in __instance.availablePatrons)
+                        if (patron is Salesman s && !string.IsNullOrEmpty(s.seed))
+                            seeds.Add(s.seed);
+
+                    var dropped = OrphanPurger.Purge(
+                        reg, activeIds, archivedIds, seeds, currentStationId);
+                    if (dropped.Count > 0)
+                        Plugin.Log.LogInfo(
+                            $"Orphan-purged {dropped.Count} stale entr{(dropped.Count == 1 ? "y" : "ies")} " +
+                            $"at station {currentStationId}: {string.Join(", ", dropped)}");
+                }
+                catch (Exception e)
+                {
+                    Plugin.Log.LogError($"Orphan purge failed: {e}");
+                }
             }
 
             EvictRolledOff(__instance);
@@ -227,9 +327,26 @@ internal static class BarRefreshPatches
             if (plugin.Registry.TryGet(existing, out var existingRecord))
                 alreadyAssigned.Add(existingRecord.StoryId);
 
-        // Mint the seed with our stable prefix.
-        var brokerIndex = alreadyAssigned.Count;
-        var candidateSeed = $"{BrokerSeedPrefix}{station.guid}-{brokerIndex}";
+        // Claim this station's injection slot BEFORE minting the seed or
+        // creating the patron. Releases in DispatchAsync / FinalizeBrokerInjection
+        // exit paths. Prevents two rapid MissionChance rolls from both firing
+        // the LLM + both registering brokers at the same station (the
+        // "already present" check upstream only sees patrons already in
+        // bar.availablePatrons — a broker whose LLM call is still in flight
+        // isn't visible yet).
+        if (!TryClaimInjection(station.guid))
+        {
+            Plugin.Log.LogDebug(
+                $"Injection already in flight at '{station.name}'; skipping this refresh");
+            return;
+        }
+
+        // Mint the seed. Each broker gets a unique nonce suffix so multiple
+        // VGAnima brokers at the same station don't collapse to an identical
+        // vanilla-regenerated identity (name / portrait / gender come from
+        // the Salesman seed via vanilla's RNG — a deterministic seed makes
+        // them all look like the same character).
+        var candidateSeed = $"{BrokerSeedPrefix}{station.guid}-{Guid.NewGuid():N}";
 
         // v2-mission: no pre-flight storyId decision. The LLM authors the
         // mission, and LlmMissionAssigner registers it after validation.
@@ -237,10 +354,18 @@ internal static class BarRefreshPatches
         // Create the patron up-front (not added to the bar yet) so we know its
         // name + isMale for the broker section of the LLM context, and can
         // re-use the same object on the main-thread continuation.
+        //
+        // We deliberately DO NOT override `_name` or `description` here —
+        // vanilla's BarPatron.ToJson only persists the salesman seed, so any
+        // in-session override would be lost on load and require a restoration
+        // hook to re-apply. That pattern compounds for every override we add
+        // (portrait, voice, title, ...), turning the load path into a
+        // fix-up chain. Instead, the patron keeps its vanilla seed-derived
+        // identity end-to-end; VGAnima authorship shows through the
+        // LLM-written pitch/check_in/payout dialogue content, not by
+        // rebranding the NPC.
         var newPatron = new Salesman(candidateSeed, station);
         newPatron.Initialize();
-        Traverse.Create(newPatron).Field<string>("_name").Value = "The Mission Broker";
-        newPatron.description = "VGAnimaBroker";
 
         var genderSeats = sprites
             .Where(s => s.isMale == newPatron.isMale)
@@ -250,6 +375,7 @@ internal static class BarRefreshPatches
         if (genderSeats.Count == 0)
         {
             Plugin.Log.LogWarning($"No patronSprites for isMale={newPatron.isMale}; aborting");
+            ReleaseInjection(station.guid);
             return;
         }
         var usedByAny = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
@@ -270,6 +396,7 @@ internal static class BarRefreshPatches
         catch (Exception ex)
         {
             Plugin.Log.LogError($"ContextGatherer threw at '{station.name}': {ex}");
+            ReleaseInjection(station.guid);
             return;
         }
 
@@ -315,6 +442,7 @@ internal static class BarRefreshPatches
             Plugin.Log.LogWarning(
                 $"LLM timeout after {stopwatch.ElapsedMilliseconds}ms " +
                 $"(limit={plugin.Cfg.LlmTimeoutSeconds.Value}s); skipping broker at '{station.name}'");
+            ReleaseInjection(station.guid);
             return;
         }
         catch (System.Net.Http.HttpRequestException ex)
@@ -323,6 +451,7 @@ internal static class BarRefreshPatches
             Plugin.Log.LogWarning(
                 $"LLM request failed after {stopwatch.ElapsedMilliseconds}ms: {ex.Message}; " +
                 $"skipping broker at '{station.name}'");
+            ReleaseInjection(station.guid);
             return;
         }
         catch (Exception ex)
@@ -331,6 +460,7 @@ internal static class BarRefreshPatches
             Plugin.Log.LogError(
                 $"LLM call threw after {stopwatch.ElapsedMilliseconds}ms; " +
                 $"skipping broker at '{station.name}': {ex}");
+            ReleaseInjection(station.guid);
             return;
         }
 
@@ -366,6 +496,7 @@ internal static class BarRefreshPatches
                 $"---- user prompt ----\n{userPrompt}\n" +
                 $"---- raw response ----\n{rawContent}\n" +
                 $"---- end ----");
+            ReleaseInjection(station.guid);
             return;
         }
         catch (Exception ex)
@@ -376,6 +507,7 @@ internal static class BarRefreshPatches
                 $"---- user prompt ----\n{userPrompt}\n" +
                 $"---- raw response ----\n{rawContent}\n" +
                 $"---- end ----");
+            ReleaseInjection(station.guid);
             return;
         }
 
@@ -388,6 +520,11 @@ internal static class BarRefreshPatches
             $"---- end ----");
 
         // Hop back to the main thread to touch game state + add the patron.
+        // NOTE: the injection claim is NOT released here — it carries through
+        // to FinalizeBrokerInjection's finally block, which releases after
+        // the patron is fully in bar.availablePatrons (by which point the
+        // upstream "Broker already present" check can see and reject
+        // subsequent injections on its own).
         plugin.Scheduler.Enqueue(() => FinalizeBrokerInjection(
             plugin, bar, station, newPatron, candidateSeed, story));
     }
@@ -430,7 +567,8 @@ internal static class BarRefreshPatches
                     // MissionFactoryFromJson.Build XML docs for the why.
                     var missionLevel = station.level;
                     storyId = plugin.MissionAssigner.Assign(
-                        story.Mission, missionLevel, station, candidateSeed);
+                        story.Mission, missionLevel, station, candidateSeed,
+                        brokerStory: story);
                     Plugin.Log.LogInfo(
                         $"LLM-authored mission '{story.Mission.Name}' registered " +
                         $"with storyId={storyId} (missionLevel={missionLevel})");
@@ -480,7 +618,10 @@ internal static class BarRefreshPatches
                 }
             });
 
-            plugin.Registry.Register(newPatron, new ConversionRecord(warmedPairs, station, storyId, story));
+            plugin.Registry.Register(newPatron,
+                new ConversionRecord(
+                    warmedPairs, station, storyId, story,
+                    stationId:   station.guid));
             bar.availablePatrons.Add(newPatron);
 
             Plugin.Log.LogInfo(
@@ -494,6 +635,15 @@ internal static class BarRefreshPatches
         catch (Exception ex)
         {
             Plugin.Log.LogError($"FinalizeBrokerInjection threw: {ex}");
+        }
+        finally
+        {
+            // Release the in-flight claim — whether success, early return
+            // (player left station, race), or exception. After this point
+            // the patron is either in bar.availablePatrons (upstream
+            // idempotency check handles subsequent attempts) or nowhere
+            // (the slot is free for a fresh injection).
+            ReleaseInjection(station.guid);
         }
     }
 
@@ -510,9 +660,9 @@ internal static class BarRefreshPatches
             "  \"check_in\": [ /* 1..2 lines for when the captain returns mid-job */ ],\n" +
             "  \"payout\":   [ /* 2..4 lines for when the captain turns the job in */ ],\n" +
             "  \"mission\": {\n" +
-            "    \"name\":            /* <=60 chars */,\n" +
-            "    \"description\":     /* <=500 chars */,\n" +
-            "    \"completion_text\": /* <=200 chars */,\n" +
+            $"    \"name\":            /* <={MissionBlockValidator.NameSoftMaxLen} chars */,\n" +
+            $"    \"description\":     /* <={MissionBlockValidator.DescriptionSoftMaxLen} chars */,\n" +
+            $"    \"completion_text\": /* <={MissionBlockValidator.CompletionTextSoftMaxLen} chars */,\n" +
             "    \"source_faction\":  /* one of: Marauders PoliceGuild BountyGuild\n" +
             "                          TradingGuild MiningGuild IndustrialGuild SalvageGuild\n" +
             "                          Stranded MercenaryGuild Smugglers Darkspacers Puppeteers\n" +
@@ -526,20 +676,26 @@ internal static class BarRefreshPatches
             "  { \"type\": \"KillEnemies\",\n" +
             "    \"enemy_faction\":   <faction from list above>,\n" +
             "    \"required_amount\": 1..5,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "  { \"type\": \"ProtectUnit\",\n" +
-            "    \"protect_text\":    <<=120 chars> }\n" +
+            $"    \"protect_text\":    <<={MissionBlockValidator.ProtectTextSoftMaxLen} chars> }}\n" +
             "  { \"type\": \"TriggerObjective\",\n" +
             "    \"trigger\":         one of [DockedWithSpaceStation, ArrivedAtSpaceStation, MoveToArea],\n" +
             "    \"required_amount\": 1..3,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "  { \"type\": \"CollectItemTypes\",\n" +
-            "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods, Junk],\n" +
+            "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods],\n" +
             "    \"required_amount\": 1..50,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
+            "      Ore and Salvage auto-spawn a dedicated POI on the system map\n" +
+            "      (asteroid field for Ore, derelict fleet for Salvage) so the player\n" +
+            "      has a specific place to go. RefinedProduct and TradeGoods do NOT\n" +
+            "      spawn a POI — those are sourced through refineries / traders, so\n" +
+            "      the pitch should frame them as 'bring me N units you've got lying\n" +
+            "      around' rather than 'go to this location.'\n" +
             "  { \"type\": \"ClearPoi\",\n" +
             "    \"enemy_faction\":   <hostile faction from list above>,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "      Spawns a dedicated combat zone on the system map. Use ONLY when the\n" +
             "      mission is genuinely 'go fight at a specific place.' When you DO pick\n" +
             "      combat, prefer ClearPoi over KillEnemies; required_amount is auto-\n" +
@@ -550,9 +706,13 @@ internal static class BarRefreshPatches
             "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n\n" +
             "RULES FOR EVERY DIALOGUE LINE:\n" +
             "- ASCII only (no em-dashes, smart quotes, or emoji; hyphens and straight apostrophes OK)\n" +
-            "- Maximum 120 characters\n" +
+            $"- Maximum {ResponseValidator.DialogueLineSoftMaxLen} characters\n" +
             "- Non-empty, no leading/trailing whitespace\n" +
-            "- In character for the broker; reference the player's state or the location when it fits\n\n" +
+            "- In character for the broker; reference the player's state or the location when it fits\n" +
+            "- Speak in first person as the broker. NEVER prefix a line with your own name\n" +
+            "  (e.g. do NOT write \"Reagan: The Vultures are hiring\"), and NEVER refer to\n" +
+            "  yourself in the third person (\"Reagan Dualla is ready to cut the contract\").\n" +
+            "  The UI shows the speaker's name separately — adding it to the line duplicates it.\n\n" +
             "COHERENCE RULES:\n" +
             "- MISSION ARCHETYPE — context.mission_guidance has a pre-computed ranked weights\n" +
             "  dict derived from the player's specialization, titles, cargo, active missions,\n" +
@@ -564,14 +724,21 @@ internal static class BarRefreshPatches
             "  The five archetypes map to these objective types:\n" +
             "    * combat  → ClearPoi (preferred) or KillEnemies. Requires a hostile faction.\n" +
             "    * gather  → CollectItemTypes with item_category Ore or RefinedProduct.\n" +
-            "    * salvage → CollectItemTypes with item_category Salvage or Junk.\n" +
+            "    * salvage → CollectItemTypes with item_category Salvage.\n" +
             "    * deliver → TriggerObjective (Docked/Arrived/MoveToArea), optionally paired\n" +
             "                with CollectItemTypes TradeGoods for a 'haul + unload' shape.\n" +
             "    * escort  → ProtectUnit + TriggerObjective travel to destination.\n" +
             "  mission_guidance.rationale lists the signals that drove the weights — use it as\n" +
             "  flavor material (if it mentions @GatlingAmmo, the pitch can reference gunnery).\n" +
-            "- Dialogue and mission must match: if the pitch promises a rescue, include ProtectUnit\n" +
-            "  or KillEnemies, not a lone CollectItemTypes.\n" +
+            "- Dialogue and mission MUST match BOTH WAYS:\n" +
+            "    * If the pitch promises a rescue, include ProtectUnit or KillEnemies — not a lone CollectItemTypes.\n" +
+            "    * If the pitch / payout promise \"bring back the haul\" / \"recovered materials\" /\n" +
+            "      \"a cut of the loot\" / \"your share of the scrap\" — the mission MUST include a\n" +
+            "      CollectItemTypes objective producing those items. Don't promise a haul and then\n" +
+            "      only emit ClearPoi — the player sees nothing to deliver, the payout line lies.\n" +
+            "    * If the mission is pure combat (only ClearPoi / KillEnemies), the payout language\n" +
+            "      must be combat-framed (\"the zone is clear\", \"threat neutralized\", \"bounty paid\"),\n" +
+            "      NOT loot-framed.\n" +
             "- AT MOST ONE COMBAT OBJECTIVE PER STEP. Do NOT put ClearPoi and KillEnemies into\n" +
             "  the same step. ClearPoi auto-completes when its spawned zone is cleared; KillEnemies\n" +
             "  counts ANY kill of that faction anywhere — mixing them creates a 'main mission done,\n" +
@@ -622,10 +789,23 @@ internal static class BarRefreshPatches
     }
 
     /// <summary>A broker is "active" if its storyId is an active story mission
-    /// that hasn't been archived yet (i.e. not Initial and not Done).
-    /// Active brokers survive daily bar rollover.</summary>
-    private static bool IsActive(ConversionRecord record, IGamePlayerView player)
+    /// OR if the persisted-broker registry holds an entry for it. The
+    /// registry-hit path is what makes unaccepted brokers survive rotation
+    /// across sessions — spec §4 explicitly lists offered-state entries as
+    /// pin-worthy.</summary>
+    private static bool IsActive(
+        ConversionRecord record,
+        IGamePlayerView player,
+        PersistedBrokerRegistry? persistedRegistry)
     {
+        // Registry hit (offered or accepted) pins regardless of vanilla
+        // mission-list state. Unaccepted brokers have no vanilla mission yet,
+        // so without this branch they wouldn't survive rotation.
+        if (persistedRegistry?.Get(record.StoryId) is not null) return true;
+
+        // Fallback: existing vanilla-mission-list check. Still used for pre-T15
+        // sessions (persistedRegistry null) and for records whose storyId
+        // somehow left the persisted registry but is still in vanilla's list.
         if (player.IsArchived(record.StoryId)) return false;
         return player.GetActive(record.StoryId) != null;
     }
@@ -689,16 +869,26 @@ internal static class BarPatronImageDebugPatches
 /// Prefix on <see cref="BarUI.RefreshPatrons"/> that rebuilds
 /// <see cref="ConversionRegistry{TKey,TValue}"/> entries for any
 /// seed-prefixed brokers already in the bar — handles the save/load path
-/// where the registry is empty but vanilla persisted our brokers.
+/// where the session-level registry is empty but vanilla persisted our
+/// brokers.
 ///
-/// After Task 8: a rehydrated broker has no LlmStory (the prior session's
-/// one died with the record — spec §9). The prefix fires a fresh async LLM
-/// call for each rehydrated broker; if the call fails, the broker is left
-/// unregistered and falls through to vanilla ShowSalesmanInfo, as before.
+/// After Task 14 (persistence): rehydration pulls the <see cref="LlmStory"/>
+/// and mission metadata from the in-memory <see cref="PersistedBrokerRegistry"/>
+/// (loaded from the sidecar by <see cref="SaveLoadPatch"/>). No LLM call
+/// is made on this path anymore — one LLM call per broker per save, full
+/// stop. On a registry miss (e.g. sidecar missing/corrupt, orphan-purged
+/// entry, hand-crafted seed), the patron is left as a plain salesman and
+/// falls through to vanilla <c>ShowSalesmanInfo</c>.
 /// </summary>
 [HarmonyPatch(typeof(BarUI))]
 internal static class RegistryRehydratePatches
 {
+    /// <summary>Wired by <c>Plugin.Awake</c> to the shared
+    /// <see cref="PersistedBrokerRegistry"/> singleton (same one
+    /// <see cref="SaveLoadPatch"/> / <see cref="SaveWritePatch"/> use).
+    /// Null outside prod / pre-T15 integration — hook is a no-op then.</summary>
+    public static PersistedBrokerRegistry? PersistedRegistry;
+
     [HarmonyPrefix]
     [HarmonyPatch(nameof(BarUI.RefreshPatrons))]
     private static void RefreshPatrons_Prefix()
@@ -708,81 +898,70 @@ internal static class RegistryRehydratePatches
             if (Plugin.Instance is not { } plugin) return;
             var station = SpaceStation.current;
             if (station?.bar == null) return;
-
             var bar = station.bar;
 
-            // First pass: discover existing storyIds from already-registered
-            // brokers in this bar.
-            var alreadyAssigned = new HashSet<string>();
-            foreach (var p in bar.availablePatrons)
-                if (plugin.Registry.TryGet(p, out var existingRecord))
-                    alreadyAssigned.Add(existingRecord.StoryId);
-
-            // Second pass: rebuild records for seed-prefixed brokers NOT yet
-            // in the registry. Each gets an async LLM call.
             foreach (var patron in bar.availablePatrons)
             {
                 if (patron is not Salesman salesman) continue;
                 var seed = salesman.seed;
                 if (string.IsNullOrEmpty(seed)) continue;
-                if (!seed.StartsWith(BarRefreshPatches.BrokerSeedPrefix)) continue;
-                if (plugin.Registry.TryGet(patron, out _)) continue;
+                if (!seed.StartsWith(BarRefreshPatches.BrokerSeedPrefix, StringComparison.Ordinal)) continue;
+                if (plugin.Registry.TryGet(patron, out _)) continue;    // already rehydrated
 
-                // Rehydrated brokers from legacy saves offered a fixed storyId.
-                // v2-mission doesn't persist the LLM-authored storyId across sessions
-                // (spec §7 known limitation) so we fall back to the legacy factory.
-#pragma warning disable CS0618
-                var storyId = TestStoryMissions.JobsiteSurveyId;
-#pragma warning restore CS0618
-                if (plugin.PlayerView.IsArchived(storyId))
+                // Registry miss → no LLM call; leave patron as plain salesman.
+                // This replaces the v2-mission legacy-storyId fallback.
+                // Post-persistence, the only way a VGAnima-seeded patron
+                // can show up without a registry entry is:
+                //   (a) sidecar missing/corrupt (placeholder factory covers),
+                //   (b) entry was purged by orphan cleanup,
+                //   (c) someone hand-crafted a seed prefix — not our problem.
+                var entry = PersistedRegistry?.FindBySeed(seed);
+                if (entry is null)
                 {
-                    Plugin.Log.LogWarning(
-                        $"Rehydrate: legacy storyId {storyId} is archived; " +
-                        $"leaving broker '{patron.name}' unregistered");
+                    Plugin.Log.LogInfo(
+                        $"Rehydrate: seed-prefixed patron '{salesman.name}' (seed={seed}) " +
+                        "has no registry entry; leaving as plain salesman");
                     continue;
                 }
 
-                // LLM dispatch: only if enabled. Without an LLM client we have
-                // no way to fill LlmStory on rehydrate, so the broker falls
-                // through to vanilla per spec §12. (Matching the v0.1 behaviour
-                // when the LLM call fails.)
-                if (plugin.LlmClient == null)
+                // Restore ConversionRecord directly from the persisted entry.
+                // No LLM call, no new mission assignment — the mission factory
+                // was already registered by SaveLoadPatch. No name / description
+                // override either: the injection path no longer mutates those
+                // fields, so the salesman's vanilla seed-derived identity is
+                // the same before the save and after the reload. Warm-cache
+                // keys use `salesman.name` because that's what VGTTS and
+                // dialogue playback see.
+                var story = entry.Broker.Story;
+                var warmedLines = new List<(string Speaker, string Text)>();
+                foreach (var line in story.Pitch)   if (!string.IsNullOrWhiteSpace(line)) warmedLines.Add((salesman.name, line));
+                foreach (var line in story.CheckIn) if (!string.IsNullOrWhiteSpace(line)) warmedLines.Add((salesman.name, line));
+                foreach (var line in story.Payout)  if (!string.IsNullOrWhiteSpace(line)) warmedLines.Add((salesman.name, line));
+
+                plugin.Registry.Register(patron, new ConversionRecord(
+                    warmedLines:   warmedLines,
+                    station:       station,
+                    storyId:       entry.StoryId,
+                    llmStory:      story,
+                    stationId:     entry.Broker.StationId));
+
+                // Warm VGTTS cache for every rehydrated dialogue line — matches
+                // the normal injection path (see CheckUpdatePatrons_Postfix).
+                // Without this, cold-load brokers miss the cache on dialogue
+                // open and VGTTS falls back to live synthesis, which is both
+                // slower and marks the speaker as "procedural" in its logs.
+                _ = Task.Run(async () =>
                 {
-                    Plugin.Log.LogDebug(
-                        $"Rehydrate: LLM disabled, leaving broker '{patron.name}' unregistered");
-                    continue;
-                }
-
-                alreadyAssigned.Add(storyId);
-
-                var brokerInfo = new BrokerInfo(
-                    Name:           salesman.name,
-                    IsMale:         salesman.isMale,
-                    Seed:           seed,
-                    StationFaction: station.faction?.identifier ?? string.Empty);
-
-                LlmContext context;
-                try
-                {
-                    context = plugin.Gatherer.Gather(plugin.GameStateView, brokerInfo);
-                }
-                catch (Exception ex)
-                {
-                    Plugin.Log.LogError(
-                        $"Rehydrate ContextGatherer threw for '{salesman.name}': {ex}");
-                    continue;
-                }
-
-                var contextJson = JsonConvert.SerializeObject(context);
-                var systemPrompt = BuildRehydrateSystemPrompt();
-                var userPrompt = BuildRehydrateUserPrompt(contextJson, brokerInfo, station);
+                    foreach (var (speaker, text) in warmedLines)
+                    {
+                        try { await plugin.Vgtts.WarmCacheAsync(speaker, text, CancellationToken.None); }
+                        catch { /* best-effort; live TTS warms again on dialogue open */ }
+                    }
+                });
 
                 Plugin.Log.LogInfo(
-                    $"Rehydrate: dispatching LLM for '{salesman.name}' " +
-                    $"at '{station.name}' (seed={seed}, storyId={storyId})");
-
-                _ = RehydrateDispatchAsync(plugin, bar, station, salesman, storyId,
-                    systemPrompt, userPrompt);
+                    $"Rehydrate: restored broker '{salesman.name}' (seed={seed}, storyId={entry.StoryId}) from sidecar " +
+                    $"(warming {warmedLines.Count} TTS line(s))");
             }
         }
         catch (Exception ex)
@@ -791,6 +970,7 @@ internal static class RegistryRehydratePatches
         }
     }
 
+    [System.Obsolete("Superseded by PersistedBrokerRegistry-driven rehydration in T14. Remove after T17 E2E verification.")]
     private static async Task RehydrateDispatchAsync(
         Plugin plugin, Bar bar, SpaceStation station, Salesman patron,
         string storyId, string systemPrompt, string userPrompt)
@@ -853,6 +1033,7 @@ internal static class RegistryRehydratePatches
             plugin, bar, station, patron, storyId, story));
     }
 
+    [System.Obsolete("Superseded by PersistedBrokerRegistry-driven rehydration in T14. Remove after T17 E2E verification.")]
     private static void FinalizeRehydrate(
         Plugin plugin, Bar bar, SpaceStation station, Salesman patron,
         string storyId, LlmStory story)
@@ -888,7 +1069,10 @@ internal static class RegistryRehydratePatches
                 }
             });
 
-            plugin.Registry.Register(patron, new ConversionRecord(warmedPairs, station, storyId, story));
+            plugin.Registry.Register(patron,
+                new ConversionRecord(
+                    warmedPairs, station, storyId, story,
+                    stationId:   station.guid));
 
             Plugin.Log.LogInfo(
                 $"Rehydrated LLM-authored broker '{patron.name}' at '{station.name}' " +
@@ -900,6 +1084,7 @@ internal static class RegistryRehydratePatches
         }
     }
 
+    [System.Obsolete("Superseded by PersistedBrokerRegistry-driven rehydration in T14. Remove after T17 E2E verification.")]
     private static string BuildRehydrateSystemPrompt()
     {
         // v2-mission system prompt per spec §8. Duplicated verbatim from
@@ -916,9 +1101,9 @@ internal static class RegistryRehydratePatches
             "  \"check_in\": [ /* 1..2 lines for when the captain returns mid-job */ ],\n" +
             "  \"payout\":   [ /* 2..4 lines for when the captain turns the job in */ ],\n" +
             "  \"mission\": {\n" +
-            "    \"name\":            /* <=60 chars */,\n" +
-            "    \"description\":     /* <=500 chars */,\n" +
-            "    \"completion_text\": /* <=200 chars */,\n" +
+            $"    \"name\":            /* <={MissionBlockValidator.NameSoftMaxLen} chars */,\n" +
+            $"    \"description\":     /* <={MissionBlockValidator.DescriptionSoftMaxLen} chars */,\n" +
+            $"    \"completion_text\": /* <={MissionBlockValidator.CompletionTextSoftMaxLen} chars */,\n" +
             "    \"source_faction\":  /* one of: Marauders PoliceGuild BountyGuild\n" +
             "                          TradingGuild MiningGuild IndustrialGuild SalvageGuild\n" +
             "                          Stranded MercenaryGuild Smugglers Darkspacers Puppeteers\n" +
@@ -932,20 +1117,26 @@ internal static class RegistryRehydratePatches
             "  { \"type\": \"KillEnemies\",\n" +
             "    \"enemy_faction\":   <faction from list above>,\n" +
             "    \"required_amount\": 1..5,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "  { \"type\": \"ProtectUnit\",\n" +
-            "    \"protect_text\":    <<=120 chars> }\n" +
+            $"    \"protect_text\":    <<={MissionBlockValidator.ProtectTextSoftMaxLen} chars> }}\n" +
             "  { \"type\": \"TriggerObjective\",\n" +
             "    \"trigger\":         one of [DockedWithSpaceStation, ArrivedAtSpaceStation, MoveToArea],\n" +
             "    \"required_amount\": 1..3,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "  { \"type\": \"CollectItemTypes\",\n" +
-            "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods, Junk],\n" +
+            "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods],\n" +
             "    \"required_amount\": 1..50,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
+            "      Ore and Salvage auto-spawn a dedicated POI on the system map\n" +
+            "      (asteroid field for Ore, derelict fleet for Salvage) so the player\n" +
+            "      has a specific place to go. RefinedProduct and TradeGoods do NOT\n" +
+            "      spawn a POI — those are sourced through refineries / traders, so\n" +
+            "      the pitch should frame them as 'bring me N units you've got lying\n" +
+            "      around' rather than 'go to this location.'\n" +
             "  { \"type\": \"ClearPoi\",\n" +
             "    \"enemy_faction\":   <hostile faction from list above>,\n" +
-            "    \"description\":     <<=120 chars> }\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "      Spawns a dedicated combat zone on the system map. Use ONLY when the\n" +
             "      mission is genuinely 'go fight at a specific place.' When you DO pick\n" +
             "      combat, prefer ClearPoi over KillEnemies; required_amount is auto-\n" +
@@ -956,9 +1147,13 @@ internal static class RegistryRehydratePatches
             "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n\n" +
             "RULES FOR EVERY DIALOGUE LINE:\n" +
             "- ASCII only (no em-dashes, smart quotes, or emoji; hyphens and straight apostrophes OK)\n" +
-            "- Maximum 120 characters\n" +
+            $"- Maximum {ResponseValidator.DialogueLineSoftMaxLen} characters\n" +
             "- Non-empty, no leading/trailing whitespace\n" +
-            "- In character for the broker; reference the player's state or the location when it fits\n\n" +
+            "- In character for the broker; reference the player's state or the location when it fits\n" +
+            "- Speak in first person as the broker. NEVER prefix a line with your own name\n" +
+            "  (e.g. do NOT write \"Reagan: The Vultures are hiring\"), and NEVER refer to\n" +
+            "  yourself in the third person (\"Reagan Dualla is ready to cut the contract\").\n" +
+            "  The UI shows the speaker's name separately — adding it to the line duplicates it.\n\n" +
             "COHERENCE RULES:\n" +
             "- MISSION ARCHETYPE — context.mission_guidance has a pre-computed ranked weights\n" +
             "  dict derived from the player's specialization, titles, cargo, active missions,\n" +
@@ -970,14 +1165,21 @@ internal static class RegistryRehydratePatches
             "  The five archetypes map to these objective types:\n" +
             "    * combat  → ClearPoi (preferred) or KillEnemies. Requires a hostile faction.\n" +
             "    * gather  → CollectItemTypes with item_category Ore or RefinedProduct.\n" +
-            "    * salvage → CollectItemTypes with item_category Salvage or Junk.\n" +
+            "    * salvage → CollectItemTypes with item_category Salvage.\n" +
             "    * deliver → TriggerObjective (Docked/Arrived/MoveToArea), optionally paired\n" +
             "                with CollectItemTypes TradeGoods for a 'haul + unload' shape.\n" +
             "    * escort  → ProtectUnit + TriggerObjective travel to destination.\n" +
             "  mission_guidance.rationale lists the signals that drove the weights — use it as\n" +
             "  flavor material (if it mentions @GatlingAmmo, the pitch can reference gunnery).\n" +
-            "- Dialogue and mission must match: if the pitch promises a rescue, include ProtectUnit\n" +
-            "  or KillEnemies, not a lone CollectItemTypes.\n" +
+            "- Dialogue and mission MUST match BOTH WAYS:\n" +
+            "    * If the pitch promises a rescue, include ProtectUnit or KillEnemies — not a lone CollectItemTypes.\n" +
+            "    * If the pitch / payout promise \"bring back the haul\" / \"recovered materials\" /\n" +
+            "      \"a cut of the loot\" / \"your share of the scrap\" — the mission MUST include a\n" +
+            "      CollectItemTypes objective producing those items. Don't promise a haul and then\n" +
+            "      only emit ClearPoi — the player sees nothing to deliver, the payout line lies.\n" +
+            "    * If the mission is pure combat (only ClearPoi / KillEnemies), the payout language\n" +
+            "      must be combat-framed (\"the zone is clear\", \"threat neutralized\", \"bounty paid\"),\n" +
+            "      NOT loot-framed.\n" +
             "- AT MOST ONE COMBAT OBJECTIVE PER STEP. Do NOT put ClearPoi and KillEnemies into\n" +
             "  the same step. ClearPoi auto-completes when its spawned zone is cleared; KillEnemies\n" +
             "  counts ANY kill of that faction anywhere — mixing them creates a 'main mission done,\n" +
@@ -1016,6 +1218,7 @@ internal static class RegistryRehydratePatches
             "Reply with ONLY the JSON object.";
     }
 
+    [System.Obsolete("Superseded by PersistedBrokerRegistry-driven rehydration in T14. Remove after T17 E2E verification.")]
     private static string BuildRehydrateUserPrompt(string contextJson, BrokerInfo brokerInfo, SpaceStation station)
     {
         var gender = brokerInfo.IsMale ? "male" : "female";

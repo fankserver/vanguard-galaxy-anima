@@ -10,7 +10,11 @@ namespace VGAnima.Llm;
 /// Curated set at launch — extend once we see what the LLM actually produces.
 /// Excludes technical categories (Empty, Ammo, Turret, Module, Booster,
 /// UnusedMissionItem, Drone, Torpedo, JumpgatePass, Usable, DefensiveTurret,
-/// Currency, Crystal) that don't make sense as broker-job targets.</summary>
+/// Currency, Crystal) that don't make sense as broker-job targets.
+/// <para><c>Junk</c> is also excluded — it's a distinct raw-material category
+/// (not the same as Salvage) whose in-game sourcing isn't clearly mapped to
+/// any POI or activity. Reserved for future "special quest" variants
+/// documented in <c>docs/special-quest-ideas.md</c>.</para></summary>
 internal static class ItemCategoryWhitelist
 {
     private static readonly HashSet<string> Names = new()
@@ -19,7 +23,6 @@ internal static class ItemCategoryWhitelist
         "Salvage",
         "RefinedProduct",
         "TradeGoods",
-        "Junk",
     };
 
     public static IReadOnlyCollection<string> All => Names;

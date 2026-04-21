@@ -4,11 +4,13 @@ using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
 using Source.Galaxy.POI.Station;
+using UnityEngine;
 using VGAnima.Cache;
 using VGAnima.Config;
 using VGAnima.Llm;
 using VGAnima.Missions;
 using VGAnima.Patches;
+using VGAnima.Persistence;
 using VGAnima.Pitch;
 using VGAnima.Tts;
 using VGAnima.Unity;
@@ -44,6 +46,10 @@ public class Plugin : BaseUnityPlugin
     internal ResponseValidator Validator { get; private set; } = null!;
     internal UnityMainThreadScheduler Scheduler { get; private set; } = null!;
 
+    internal PersistedBrokerRegistry PersistedRegistry { get; private set; } = null!;
+    internal SidecarIO SidecarIO { get; private set; } = null!;
+    internal IClock Clock { get; private set; } = null!;
+
     private Harmony _harmony = null!;
 
     private void Awake()
@@ -62,10 +68,22 @@ public class Plugin : BaseUnityPlugin
         TestStoryMissions.Register();
 #pragma warning restore CS0618
 
-        MissionAssigner = new LlmMissionAssigner();
         PlayerView      = new GamePlayerView();
         Vgtts           = new VgttsBridge();
         Registry        = new ConversionRegistry<BarPatron, ConversionRecord>();
+
+        // Cross-session persistence singletons. SidecarIO takes a clock for
+        // quarantine timestamps. Registry is the in-memory source of truth
+        // during a session; flushed to disk by SaveWritePatch on vanilla save,
+        // loaded by SaveLoadPatch on vanilla load.
+        PersistedRegistry = new PersistedBrokerRegistry();
+        Clock             = new GameClock();
+        SidecarIO         = new SidecarIO(() => DateTime.UtcNow);
+
+        MissionAssigner = new LlmMissionAssigner(
+            register: Source.MissionSystem.StoryMission.Add,
+            registry: PersistedRegistry,
+            clock:    Clock);
 
         GameStateView = new GameStateView();
         Gatherer      = new ContextGatherer();
@@ -107,12 +125,70 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(RegistryRehydratePatches));
         _harmony.PatchAll(typeof(BarUIDebugPatches));
         _harmony.PatchAll(typeof(BarPatronImageDebugPatches));
+        _harmony.PatchAll(typeof(SaveWritePatch));
+        _harmony.PatchAll(typeof(SaveLoadPatch));
+        _harmony.PatchAll(typeof(MissionLookupPatch));
+        _harmony.PatchAll(typeof(MissionLifecyclePatches));
+
+        // Wire persistence singletons into Harmony patches (all four use the
+        // same PersistedBrokerRegistry + SidecarIO instances).
+        SaveWritePatch.Registry          = PersistedRegistry;
+        SaveWritePatch.Io                = SidecarIO;
+        SaveWritePatch.Log               = Log;
+
+        SaveLoadPatch.Registry           = PersistedRegistry;
+        SaveLoadPatch.Io                 = SidecarIO;
+        SaveLoadPatch.Log                = Log;
+
+        MissionLookupPatch.Registry      = PersistedRegistry;
+        MissionLifecyclePatches.Registry = PersistedRegistry;
+
+        BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
+        RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
+
+        // Dead-sidecar startup sweep: delete sidecars whose vanilla save file
+        // was removed outside the game. Bounded by save-directory size; runs
+        // once at plugin load.
+        try
+        {
+            var savesPath = Source.Util.SaveGame.SavesPath;
+            var swept = DeadSidecarSweeper.Sweep(savesPath);
+            if (swept.Count > 0) Log.LogInfo($"Swept {swept.Count} dead sidecar(s) from {savesPath}");
+        }
+        catch (Exception e)
+        {
+            Log.LogError($"Dead-sidecar sweep failed: {e}");
+            // Never rethrow; sweep failure is non-fatal.
+        }
+
+        // ApplicationQuit safety net (spec §5): flush to the most recently
+        // active save slot when the player closes the game. If no slot was
+        // ever active this session (player never saved/loaded), nothing to
+        // flush — matches vanilla's "quit without save = lose changes" semantics.
+        Application.quitting += OnAppQuitting;
 
         Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} patches)");
     }
 
+    private void OnAppQuitting()
+    {
+        var path = SaveLoadPatch.LastKnownSavePath ?? SaveWritePatch.LastKnownSavePath;
+        if (path is null) return;
+        try
+        {
+            var sidecarPath = SidecarPathResolver.From(path);
+            var entries     = System.Linq.Enumerable.ToArray(PersistedRegistry.All());
+            SidecarIO.Write(sidecarPath, new SidecarSchema(
+                Version: SidecarSchema.CurrentVersion,
+                Entries: entries));
+            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} to {sidecarPath}");
+        }
+        catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
+    }
+
     private void OnDestroy()
     {
+        Application.quitting -= OnAppQuitting;
         _harmony?.UnpatchSelf();
         if (LlmClient is IDisposable disposable) disposable.Dispose();
     }

@@ -400,7 +400,7 @@ VGAnima whitelist: `DockedWithSpaceStation`, `ArrivedAtSpaceStation`,
 | `KillEnemies` | `KillEnemies` objective | `requiredAmount` from LLM (1..5). Kill any N of faction, anywhere. |
 | `ProtectUnit` | `ProtectUnit` objective | `requiredAmount = 1`. Keep the named unit alive. |
 | `TriggerObjective` | `TriggerObjective` objective | Trigger one of DockedWithSpaceStation / ArrivedAtSpaceStation / MoveToArea. `requiredAmount` 1..3. |
-| `CollectItemTypes` | `CollectItemTypes` objective | Category one of Ore, Salvage, RefinedProduct, TradeGoods, Junk. `requiredAmount` 1..50. |
+| `CollectItemTypes` | `CollectItemTypes` objective | Category one of Ore, Salvage, RefinedProduct, TradeGoods. `requiredAmount` 1..50. (`Junk` intentionally excluded — reserved for special-quest variants in `docs/special-quest-ideas.md`.) |
 | `ClearPoi` | Spawns Combat POI + `KillEnemies` | Mirrors `BountyHunt`. `requiredAmount` derived from `combat.totalUnitCount`. |
 
 ---
@@ -440,3 +440,125 @@ language.
 8. "Clear a POI" = spawn a Combat POI, attach to step, emit `KillEnemies` with `requiredAmount = totalUnitCount`.
 9. Clamp credits base to 15..100 and XP base to 30..100 — outside this, rewards drift from the vanilla board.
 10. Reputation rewards cluster around 200–350 in vanilla; 400 is the SideMission ceiling, 500 is the top of the broker-feasible range.
+
+---
+
+## Save / Load / Mission-Lifecycle API
+
+Harmony hook targets and semantics for cross-session persistence work.
+Scouted against `/tmp/decomp` — line numbers are approximate.
+
+### Save-write
+
+**Target:** `Source.Util.SaveGame.Store(JsonObject data, string saveName, SaveGameFormat format, int attempt)`
+
+```csharp
+public static void Store(JsonObject data, string saveName,
+    SaveGameFormat format = SaveGameFormat.Compressed, int attempt = 0)
+{
+    _saves = null;
+    FileInfo fileInfo = new FileInfo(SavesDir.FullName + "/" + saveName + ".save");
+    // ... GZip-compress UTF-8 JSON into fileInfo ...
+}
+```
+
+- **Save path:** `SavesDir.FullName + "/" + saveName + ".save"`. `SavesDir` resolves to `Application.persistentDataPath + "/Saves"` (public static `SaveGame.SavesPath`, initialized in static ctor).
+- **Single-threaded** — `FileStream.Open(FileMode.Create)` on the main thread. Retries up to 5 attempts on IOException.
+- **Harmony postfix** on `Store` is clean: `__args[1]` gives the `saveName`, so a postfix can derive the sidecar path as `$"{SaveGame.SavesPath}/{saveName}.save.vganima.json"` and write atomically after `Store` returns.
+
+### Save-load
+
+**Target:** `Source.Util.SaveGameFile.LoadSaveGame()` — instance method.
+
+```csharp
+public void LoadSaveGame()
+{
+    SaveGame.LoadState(Recall());  // Recall() reads + gunzips the file
+}
+```
+
+- **Instance state exposes full path:** the `SaveGameFile` instance has `public readonly FileInfo File` and `public readonly string Name` (saveName without `.save` suffix). A Harmony prefix on `LoadSaveGame` sees `__instance.File.FullName` and can read the paired sidecar before `Recall()` and `LoadState(...)` fire.
+- **Load order:** `LoadSaveGame` → `Recall` → `LoadState(data)` → `GamePlayer.FromJson(data["Player"])` → mission list deserialization via `Mission.FromJson` per entry.
+- **Prefix on `SaveGameFile.LoadSaveGame`** fires strictly before any `Mission.FromJson` call — ideal hook for factory registration.
+
+### Mission deserialization semantics
+
+**Target:** `Source.MissionSystem.Mission.FromJson(JsonValue data)`
+
+```csharp
+public static Mission FromJson(JsonValue data)
+{
+    if (data.IsString)
+        return StoryMission.Get(GamePlayer.current, data);  // <-- storyId reference path
+    Mission mission = new Mission();
+    mission.DataFromJson(data);                             // <-- embedded-object path
+    return mission;
+}
+```
+
+- **Active missions in a save are serialized as full JsonObjects**, not string IDs. They rehydrate via `DataFromJson` and **do NOT re-invoke the `StoryMission` factory**. Meaning: our `MissionFactoryFromJson.Build` is called once at creation time; the in-memory `Mission` is serialized with all its state; on load it's reconstructed directly without the factory.
+- **String-path is hit** for cross-references where only the storyId was persisted (e.g. some archive or queue entries). Unknown `vganima_llm_*` IDs on this path throw `KeyNotFoundException` at `StoryMission.Get`.
+- **Upshot for VGAnima:** registered factories are insurance, not primary. The placeholder safety net is what matters — it catches the string-path hits we can't otherwise satisfy after a session restart.
+
+### Mission lookup
+
+**Target:** `Source.MissionSystem.StoryMission.Get(GamePlayer player, string id)`
+
+```csharp
+public static Mission Get(GamePlayer player, string id)
+{
+    Mission mission = allMissions[id].generator(player);  // throws KeyNotFoundException on miss
+    mission.storyId = id;
+    return mission;
+}
+```
+
+- Backing field `allMissions` is the static registry.
+- **Harmony prefix on `Mission.FromJson` (not `StoryMission.Get`)** is the cleaner injection point — checks `data.IsString` + `StoryMission.allMissions.ContainsKey(id)` before the dictionary indexer fires. On miss for a `vganima_llm_*` id, returns a `PlaceholderMission` and skips the original via `return false`.
+
+### Mission acceptance
+
+**Target:** `Source.Player.GamePlayer.AddMissionWithLog(Mission mission)` (not the `string` overload — that one just delegates via `StoryMission.Get(this, id)` into the same `Mission` overload).
+
+```csharp
+public void AcceptMission(Mission mission)
+{
+    if (!IsMissionsLimitExceeded())
+    {
+        AddMissionWithLog(mission);
+        SpaceStation.current.missionBoard.AcceptMission(mission);
+        RefreshMissionPanel(mission);
+    }
+}
+```
+
+- **Single chokepoint for all acceptance paths** (dialogue accept, broker accept, mission board accept).
+- **Harmony postfix** on `AddMissionWithLog(Mission)` fires for every transition from offered → active.
+
+### Mission resolution
+
+**Targets:**
+
+- `Source.Player.GamePlayer.CompleteMission(Mission m, bool force)` — `GamePlayer.cs:826`
+- `Source.MissionSystem.Mission.MissionFailed(string reason)` — `Mission.cs:355`
+- `Source.Player.GamePlayer.ArchiveMission(string id, bool allowDuplicate)` — `GamePlayer.cs:769`
+
+All three are non-virtual entry points on `GamePlayer.current` (singleton) or `Mission` itself. Harmony postfixes cover every resolution path.
+
+### Player mission list access
+
+- Active missions: `GamePlayer.current.missions` (`List<Mission>`)
+- Extended active (bounty/patrol/industry + regular): `GamePlayer.current.allMissions` (`IEnumerable<Mission>`)
+- Archived IDs: `GamePlayer.current.missionsArchive` (`List<string>`)
+- Per-id lookup: `GamePlayer.current.GetActiveStoryMission(string id)` — null if not active
+
+VGAnima's existing `IGamePlayerView.IsArchived(id)` / `GetActive(id)` already wrap these correctly.
+
+### Save directory
+
+```csharp
+// SaveGame.cs static ctor
+SavesPath = Application.persistentDataPath + "/Saves";
+```
+
+Save files live at `{persistentDataPath}/Saves/{saveName}.save`. Sidecar lives at `{persistentDataPath}/Saves/{saveName}.save.vganima.json`. Startup dead-sidecar sweep enumerates `*.vganima.json` in this directory and drops any whose paired `.save` is gone.

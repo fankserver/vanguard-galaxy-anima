@@ -265,32 +265,6 @@ public class MissionGuidanceBuilderTests
     }
 
     [Fact]
-    public void Build_DamagedShip_BoostsCombat()
-    {
-        var ctx = NewContext();
-        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with
-        {
-            HullPct   = 45,
-            ShieldPct = 10,
-        };
-        var g = MissionGuidanceBuilder.Build(ctx);
-
-        Assert.Equal("combat", g.ArchetypeWeights.First().Key);
-    }
-
-    [Fact]
-    public void Build_FullCargo_BoostsDeliver()
-    {
-        var ctx = NewContext();
-        ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { CargoUsedPct = 85 };
-        var g = MissionGuidanceBuilder.Build(ctx);
-
-        // Full cargo alone is Medium(1) — competes against the even-fallback base;
-        // confirm it wins outright.
-        Assert.Equal("deliver", g.ArchetypeWeights.First().Key);
-    }
-
-    [Fact]
     public void Build_HostileNeighborSystem_BoostsCombatAndEscort()
     {
         var ctx = NewContext();

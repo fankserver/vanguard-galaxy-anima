@@ -87,11 +87,13 @@ Any validation failure → no broker is injected, full system/user/raw-response 
 - Credit / XP amounts computed via `GameMath.GetCreditsValue` + `GetExperienceRewardValue` with the station level.
 - `ClearPoi` objectives spawn a `Combat` POI in the station's system via `SystemMapData.AddCombat`, seed it with `CreateUnitPayload + AddGuards`, pin to the step's `dynamicPointOfInterest`, return `KillEnemies { requiredAmount = combat.totalUnitCount }` — mirrors vanilla `BountyHunt`.
 
-**6. Registration + rehydration.** `LlmMissionAssigner` registers the finished Mission into `StoryMission.allMissions` with a globally-unique storyId (`vganima_llm_<station-guid>_<broker-seed>_<nonce>`). The broker is then added to the bar roster.
+**6. Registration + rehydration.** `LlmMissionAssigner` registers the finished Mission into `StoryMission.allMissions` with a globally-unique storyId (`vganima_llm_<station-guid>_<broker-seed>_<nonce>`), and pushes a `PersistedEntry` into the in-memory `PersistedBrokerRegistry` (state=offered). The broker is then added to the bar roster.
 
-On save/reload within the same session, seed-prefixed brokers without registry entries get their dialogue re-fetched from the LLM. **Cross-session persistence is not implemented** — the StoryMission factory is in-memory only; a mission accepted in one play session and reloaded across a game restart throws `KeyNotFoundException`. This is a known limitation; see the roadmap.
+**7. Cross-session persistence.** Each vanilla save gets a pair-named sidecar `<save>.save.vganima.json` containing the LLM-authored mission blocks, broker dialogue trees, and broker→station bindings for all offered + accepted missions. A Harmony postfix on `SaveGame.Store` flushes the in-memory registry to the sidecar after vanilla's own save succeeds; a prefix on `SaveGameFile.LoadSaveGame` reads the sidecar and registers rebuild factories *before* vanilla's mission-list deserialization runs. The `ApplicationQuit` safety net flushes pending state when the player closes the game mid-session. Orphan purge runs during the first post-load bar refresh, dropping entries whose storyIds left vanilla's mission lists or whose brokers left the bar.
 
-**7. Broker interaction.** `SalesmanPatches` dispatches on the mission's state:
+Security: sidecars go through `VGAnimaSidecarSerializationBinder`, an allowlist over the concrete `LlmObjective` / `LlmReward` subtypes. Untrusted `$type` discriminators throw on deserialization. A missing or corrupted sidecar quarantines to `<save>.save.vganima.corrupt.<timestamp>.json` and the game continues with an empty registry — the `MissionLookupPatch` placeholder prevents `KeyNotFoundException` for any orphan storyIds vanilla's save still references.
+
+**8. Broker interaction.** `SalesmanPatches` dispatches on the mission's state:
 - `Initial` → pitch dialogue, then `GamePlayer.AddMissionWithLog`.
 - `InProgress` → check-in dialogue.
 - `ReadyToClaim` → payout dialogue, `CompleteMission` (vanilla reward pipeline fires), broker departs.
@@ -121,8 +123,9 @@ Successful parses also emit the full prompt/response dump at Debug level so you 
 - **Broker never appears** — check the boot log confirmed `LLM enabled: yes`, then watch for the LLM dispatch line: `Dispatching LLM for broker at '<station>'`. If that line is missing the probability roll failed (`MissionChance` < 1.0) or a vanilla NPC is hogging the seat budget (6 cap per bar). The dispatch log lists every gate that fired at Debug level.
 - **Broker spawns but mission has weird rewards** — check the Debug log for `Reward[Credits]: base_value=X missionLevel=Y → amount=Z` lines. Rewards are area-level-anchored; an over-leveled player at a low-level station will see XP near 1 (vanilla anti-farm at work, not a bug). See `docs/vanilla-reference.md` for the formulas.
 - **Every broker pitches combat (or gather, or...)** — check the `mission_guidance` block in the user prompt dump. The ranked weights show why a specific archetype was picked. Weights are derived from player signals; adjust your fleet loadout / specialization / titles if the skew is unexpected.
-- **Reload a save and the mission disappears** — known limitation. LLM-authored missions live in the `StoryMission` registry for the session's remainder only; cross-session persistence is on the roadmap.
-- **Broker name changes after save/reload** — only the Salesman's seed is persisted by vanilla `BarPatron.ToJson`; our in-memory `_name` override is lost on load and the seeded-random regenerates (*"The Mission Broker"* → *"Shawn Jenkins"* etc.). The storyId assignment survives within a session.
+- **Reload a save and the mission is gone** — check `BepInEx/LogOutput.log` for the load-time banner `Loaded N broker entries from <sidecar>`. If it says `No sidecar at <path>` or `Sidecar corrupted; quarantined to ...`, the paired file was missing/unreadable; affected missions auto-archive via `PlaceholderMission`. The sidecar should live alongside the vanilla save at `{persistentDataPath}/Saves/<saveName>.save.vganima.json`.
+- **Broker in bar but no mission dialogue after reload** — the sidecar entry may have been orphan-purged (storyId not in vanilla's active/archived list AND broker seed not in any current bar). Check the load log for `Orphan-purged N stale entries`. This typically happens after loading an older save slot that doesn't match the sidecar.
+- **Sidecar not updating on save** — confirm the log emits `Flushed N broker entries to <sidecar>` after each save. No log line = the Harmony postfix didn't run (check plugin load order).
 
 ## Docs
 
@@ -132,11 +135,11 @@ Successful parses also emit the full prompt/response dump at Debug level so you 
 
 ## Roadmap
 
-Current milestone **v2-mission** shipped: full-mission authoring with `vganima/mission/v1` schema, ClearPoi combat POIs, ranked archetype scoring, hardpoint-based capability signals, faction identifier/display-name split.
+Shipped milestones:
+- **v2-mission** — full-mission authoring with `vganima/mission/v1` schema, ClearPoi combat POIs, ranked archetype scoring, hardpoint-based capability signals, faction identifier/display-name split.
+- **Persistence** — pair-named sidecar per vanilla save; offered + accepted brokers survive rotation and restart; locked-down `TypeNameHandling` allowlist; corrupt/missing sidecars fail soft via placeholder mission. See `docs/superpowers/specs/2026-04-21-mission-persistence-design.md`.
 
 Next up:
-
-- **Persistence** — serialize LLM-authored missions into the vanilla save stream so they survive game restarts. (Spec §12; highest priority for v1.1.)
 - **Activity history** — track player's observable interactions at each station (refinery use, workshop use, trade terminal, prior broker deals) as context for the LLM. The narrative-honest alternative to cargo peeking.
 - **Fleet capability profile** — surface stored-ship loadouts too, not just primary, so brokers understand "this player could swap into a mining rig" when weighting archetypes.
 - **Prompt caching / cost controls** — shared system-prompt cache across dispatches.

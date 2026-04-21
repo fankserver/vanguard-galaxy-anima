@@ -75,9 +75,9 @@ public class WhitelistsTests
 
     // -------- ItemCategory --------
     [Fact]
-    public void ItemCategoryWhitelist_HasExactlyFiveEntries()
+    public void ItemCategoryWhitelist_HasExactlyFourEntries()
     {
-        Assert.Equal(5, ItemCategoryWhitelist.All.Count);
+        Assert.Equal(4, ItemCategoryWhitelist.All.Count);
     }
 
     [Theory]
@@ -85,7 +85,6 @@ public class WhitelistsTests
     [InlineData("Salvage")]
     [InlineData("RefinedProduct")]
     [InlineData("TradeGoods")]
-    [InlineData("Junk")]
     public void ItemCategoryWhitelist_Contains_Allowed(string cat)
     {
         Assert.True(ItemCategoryWhitelist.Contains(cat));
@@ -96,6 +95,7 @@ public class WhitelistsTests
     [InlineData("Crystal")]
     [InlineData("Empty")]
     [InlineData("IronOre")]   // item identifier, not a category
+    [InlineData("Junk")]      // reserved for special-quest variants (docs/special-quest-ideas.md)
     [InlineData("")]
     public void ItemCategoryWhitelist_Rejects_Others(string cat)
     {
