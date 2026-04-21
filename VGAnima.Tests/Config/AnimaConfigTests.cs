@@ -36,10 +36,10 @@ public class AnimaConfigTests
     }
 
     [Fact]
-    public void Llm_TimeoutSeconds_DefaultsTo15()
+    public void Llm_TimeoutSeconds_DefaultsTo60()
     {
         var cfg = new AnimaConfig(NewConfigFile());
-        Assert.Equal(15, cfg.LlmTimeoutSeconds.Value);
+        Assert.Equal(60, cfg.LlmTimeoutSeconds.Value);
     }
 
     [Fact]

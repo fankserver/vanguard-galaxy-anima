@@ -1,3 +1,4 @@
+using System;
 using Source.Galaxy;
 using Source.Galaxy.POI;
 using Source.MissionSystem;
@@ -11,35 +12,25 @@ using StoryMissionRegistry = Source.MissionSystem.StoryMission;
 
 namespace VGAnima.Missions;
 
-/// <summary>
-/// Plugin-defined <see cref="StoryMission"/> registrations. Used instead of
-/// wrapping vanilla side missions (which have progress gates / narrative
-/// implications we shouldn't piggyback on). Static templates for now — one
-/// simple mission (talk -> dock somewhere -> done) to prove the pipeline;
-/// broader content comes later.
+/// <summary>Legacy v1 plugin-defined <see cref="StoryMission"/> registration.
+/// Retained for save-load tolerance only: in-flight saves pinning the
+/// <see cref="JobsiteSurveyId"/> need the factory in the registry so
+/// <see cref="Mission.FromJson(string)"/> doesn't
+/// <see cref="System.Collections.Generic.KeyNotFoundException"/>.
 ///
-/// <para>Call <see cref="Register"/> from <c>Plugin.Awake</c> <b>before</b>
-/// any save loads. The vanilla factory rehydration path
-/// (<c>Mission.FromJson(string)</c> -> <c>StoryMission.Get(player, id)</c>)
-/// throws <see cref="System.Collections.Generic.KeyNotFoundException"/> if
-/// the storyId isn't in the registry when a save is loaded. Persistence is
-/// explicitly out of scope at this stage — player is expected to complete
-/// or abandon the mission in the same session.</para>
-/// </summary>
+/// <para>v2-mission does NOT pitch this mission to new brokers — injection
+/// uses <see cref="LlmMissionAssigner"/> with per-broker storyIds. Remove
+/// this type (and <see cref="TestMissionAssigner"/>) once the stale-save
+/// window has passed.</para></summary>
+[Obsolete("retained for legacy save compatibility; v2-mission authors missions per broker via LlmMissionAssigner")]
 internal static class TestStoryMissions
 {
-    /// <summary>
-    /// Identifier for the single test mission. Prefixed so log lines and
-    /// save archaeology make the plugin origin obvious.
-    /// </summary>
     public const string JobsiteSurveyId = "vganima_test_jobsite_survey";
 
     private static bool _registered;
 
-    /// <summary>
-    /// Idempotent: multiple calls are safe (the dict indexer overwrites),
-    /// but the guard avoids burning a dict slot on a re-add.
-    /// </summary>
+    /// <summary>Idempotent. Called from <c>Plugin.Awake</c> so legacy saves
+    /// load cleanly.</summary>
     public static void Register()
     {
         if (_registered) return;
@@ -48,16 +39,12 @@ internal static class TestStoryMissions
         StoryMissionRegistry.Add(new StoryMissionRegistry(
             JobsiteSurveyId,
             CreateJobsiteSurvey,
-            available: null,             // always available
+            available: null,
             pickupHint: "VGAnima Broker"));
     }
 
     private static Mission CreateJobsiteSurvey(GamePlayer player)
     {
-        // sourcePoi / turnIn snap to whichever station the broker pitched at
-        // (AddMissionWithLog runs at dialogue close, so MapPointOfInterest.current
-        // is the station the player's docked at). Mirrors the vanilla SideMissions
-        // pattern.
         var sourcePoi = MapPointOfInterest.current;
 
         var mission = new Mission
@@ -70,7 +57,7 @@ internal static class TestStoryMissions
             sourceFaction   = Faction.tradingGuild,
             trackedOnHud    = true,
             difficulty      = MissionDifficulty.Story,
-            iconName        = "Combat",      // reuse vanilla icon name; swap to map-location icon later
+            iconName        = "Combat",
             canBeIdled      = false,
             dynamicLevel    = true,
         };

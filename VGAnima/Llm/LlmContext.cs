@@ -16,8 +16,26 @@ internal sealed class LlmContext
     [JsonProperty("fleet")]        public LlmFleetSection    Fleet        { get; set; } = null!;
     [JsonProperty("cargo_contents")] public IReadOnlyList<LlmCargoSnapshot> CargoContents { get; set; } = null!;
     [JsonProperty("location")]     public LlmLocationSection Location     { get; set; } = null!;
-    [JsonProperty("reputation")]   public IReadOnlyDictionary<string, int> Reputation { get; set; } = null!;
-    [JsonProperty("at_war")]       public IReadOnlyList<string> AtWar     { get; set; } = null!;
+    /// <summary>Unified per-faction snapshot: identifier → (display_name,
+    /// relation, reputation). Replaces the earlier trio of <c>reputation</c> /
+    /// <c>at_war</c> / <c>hostile_factions</c> fields. Keys are the stable
+    /// identifiers (<see cref="Source.Galaxy.Faction"/>.identifier); use
+    /// identifiers in mission block fields, the entry's display_name in
+    /// dialogue text. <c>relation</c> matches vanilla
+    /// <c>FactionData.IsEnemy</c>: hostile if <c>at_war</c> or rep &lt; -500,
+    /// neutral for rep in [-500, 0], friendly for rep &gt; 0.</summary>
+    [JsonProperty("factions")] public IReadOnlyDictionary<string, LlmFactionEntry> Factions { get; set; } = null!;
+    /// <summary>Numeric clamps the LLM must respect for reward base_values.
+    /// Mirrored in the system prompt as an IMPORTANT rule — repetition lowers
+    /// the out-of-range rate compared to stating them only in the schema block.</summary>
+    [JsonProperty("reward_clamps")] public LlmRewardClampsSection RewardClamps { get; set; } = null!;
+    /// <summary>Pre-computed archetype recommendation for the mission. We do
+    /// the signal aggregation (cargo inspection, specialization, titles, active
+    /// missions, faction state, etc.) and hand the LLM a ranked weights dict
+    /// plus a rationale. The LLM's job is to author dialogue that fits — not
+    /// to synthesize the decision from scattered raw signals. See
+    /// <see cref="MissionGuidanceBuilder"/> for the weighting rules.</summary>
+    [JsonProperty("mission_guidance")] public LlmMissionGuidance MissionGuidance { get; set; } = null!;
     [JsonProperty("missions")]     public LlmMissionsSection Missions     { get; set; } = null!;
     [JsonProperty("story_arcs_active")] public IReadOnlyList<string> StoryArcsActive { get; set; } = null!;
     [JsonProperty("waypoints")]    public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = null!;
@@ -111,6 +129,39 @@ internal sealed class LlmBrokerSection
     [JsonProperty("is_male")]         public bool IsMale { get; set; }
     [JsonProperty("seed")]            public string Seed { get; set; } = string.Empty;
     [JsonProperty("station_faction")] public string StationFaction { get; set; } = string.Empty;
+}
+
+internal sealed record LlmFactionEntry(
+    [property: JsonProperty("display_name")] string DisplayName,
+    [property: JsonProperty("relation")]     string Relation,
+    [property: JsonProperty("reputation")]   int    Reputation);
+
+internal sealed class LlmMissionGuidance
+{
+    /// <summary>Normalized weights per archetype; entries sum to 1.0 (or close,
+    /// modulo rounding). Higher = stronger recommendation. Keys are the five
+    /// archetype strings: "combat", "gather", "salvage", "deliver", "escort".
+    /// Serialization preserves insertion order — ranked high-to-low.</summary>
+    [JsonProperty("archetype_weights")] public IReadOnlyDictionary<string, double> ArchetypeWeights { get; set; } = null!;
+
+    /// <summary>Archetypes the LLM MUST NOT pick — impossible given context.
+    /// E.g. <c>combat</c> is forbidden when no faction is hostile.</summary>
+    [JsonProperty("forbidden_archetypes")] public IReadOnlyList<string> ForbiddenArchetypes { get; set; } = null!;
+
+    /// <summary>Short phrases explaining which signals drove the weighting.
+    /// Not used by the LLM for decisions — but useful in logs + makes debugging
+    /// miscalibrations easy ("why did it pick combat?").</summary>
+    [JsonProperty("rationale")] public IReadOnlyList<string> Rationale { get; set; } = null!;
+}
+
+internal sealed class LlmRewardClampsSection
+{
+    [JsonProperty("credits_base_value_min")]    public int CreditsBaseValueMin    { get; set; }
+    [JsonProperty("credits_base_value_max")]    public int CreditsBaseValueMax    { get; set; }
+    [JsonProperty("experience_base_value_min")] public int ExperienceBaseValueMin { get; set; }
+    [JsonProperty("experience_base_value_max")] public int ExperienceBaseValueMax { get; set; }
+    [JsonProperty("reputation_amount_min")]     public int ReputationAmountMin    { get; set; }
+    [JsonProperty("reputation_amount_max")]     public int ReputationAmountMax    { get; set; }
 }
 
 /// <summary>Broker-specific input to <see cref="ContextGatherer.Gather"/> that

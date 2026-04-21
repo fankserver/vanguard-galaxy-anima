@@ -367,4 +367,133 @@ public class ResponseValidatorTests
         Assert.Equal(2, story.CheckIn.Count);
         Assert.Equal(4, story.Payout.Count);
     }
+
+    // ---------- v2-mission schema dispatch ----------
+
+    private const string ValidMissionPayload = @"{
+        ""schema"": ""vganima/mission/v1"",
+        ""pitch"":    [""Line 1."", ""Line 2."", ""Line 3.""],
+        ""check_in"": [""Any luck?""],
+        ""payout"":   [""Good job."", ""Here's your cut.""],
+        ""mission"": {
+            ""name"":            ""Test Run"",
+            ""description"":     ""Go do a thing."",
+            ""completion_text"": ""Thanks."",
+            ""source_faction"":  ""TradingGuild"",
+            ""steps"": [
+                { ""objectives"": [
+                    { ""type"": ""TriggerObjective"",
+                      ""trigger"": ""DockedWithSpaceStation"",
+                      ""required_amount"": 1,
+                      ""description"": ""Dock."" } ] } ],
+            ""rewards"": [
+                { ""type"": ""Credits"", ""base_value"": 50 } ] } }";
+
+    [Fact]
+    public void Parse_V2Mission_HappyPath_ReturnsStoryWithMission()
+    {
+        var story = new ResponseValidator().Parse(ValidMissionPayload);
+        Assert.NotNull(story.Mission);
+        Assert.Equal("Test Run",     story.Mission!.Name);
+        Assert.Equal("TradingGuild", story.Mission.SourceFaction);
+        Assert.Single(story.Mission.Steps);
+        Assert.Single(story.Mission.Rewards);
+    }
+
+    [Fact]
+    public void Parse_V1Schema_StillWorks_MissionStaysNull()
+    {
+        var story = new ResponseValidator().Parse(ValidPayload);
+        Assert.Null(story.Mission);
+    }
+
+    [Fact]
+    public void Parse_V2Mission_MissingMissionField_Rejects()
+    {
+        const string payload = @"{
+            ""schema"": ""vganima/mission/v1"",
+            ""pitch"":    [""a"",""b"",""c""],
+            ""check_in"": [""d""],
+            ""payout"":   [""e"",""f""] }";
+        var ex = Assert.Throws<LlmValidationException>(
+            () => new ResponseValidator().Parse(payload));
+        Assert.Contains("mission", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_V2Mission_ExtraTopLevelField_Rejects()
+    {
+        var payload = ValidMissionPayload.Replace(
+            @"""rewards"": [",
+            @"""extra"": ""stuff"", ""rewards"": [");
+        // Inject an unrelated extra key at the root, not inside mission.
+        var brokenRoot = ValidMissionPayload.TrimEnd('}') + @", ""junk"": ""stuff"" }";
+        Assert.Throws<LlmValidationException>(
+            () => new ResponseValidator().Parse(brokenRoot));
+    }
+
+    [Fact]
+    public void Parse_V2Mission_DispatchesToMissionValidator_OnBadObjective()
+    {
+        var broken = ValidMissionPayload.Replace(
+            @"""DockedWithSpaceStation""",
+            @"""BountyTargetKilled""");
+        var ex = Assert.Throws<LlmValidationException>(
+            () => new ResponseValidator().Parse(broken));
+        Assert.Contains("trigger", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnknownSchema_Rejects()
+    {
+        var payload = ValidPayload.Replace(
+            "vganima/story/v1",
+            "vganima/story/v99");
+        var ex = Assert.Throws<LlmValidationException>(
+            () => new ResponseValidator().Parse(payload));
+        Assert.Contains("schema", ex.Message, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Parse_V2Mission_WithAtWarContext_AcceptsHostileKill()
+    {
+        var payload = ValidMissionPayload.Replace(
+            @"{ ""type"": ""TriggerObjective"",
+                      ""trigger"": ""DockedWithSpaceStation"",
+                      ""required_amount"": 1,
+                      ""description"": ""Dock."" }",
+            @"{ ""type"": ""KillEnemies"",
+                      ""enemy_faction"": ""Marauders"",
+                      ""required_amount"": 2,
+                      ""description"": ""Kill them."" }");
+
+        var atWar = new[] { "Marauders" };
+        var rep   = new System.Collections.Generic.Dictionary<string, int>();
+        var story = new ResponseValidator().Parse(payload, atWar, rep);
+        Assert.NotNull(story.Mission);
+        Assert.IsType<LlmKillEnemies>(story.Mission!.Steps[0].Objectives[0]);
+    }
+
+    [Fact]
+    public void Parse_V2Mission_WithFriendlyContext_RejectsKillAlly()
+    {
+        var payload = ValidMissionPayload.Replace(
+            @"{ ""type"": ""TriggerObjective"",
+                      ""trigger"": ""DockedWithSpaceStation"",
+                      ""required_amount"": 1,
+                      ""description"": ""Dock."" }",
+            @"{ ""type"": ""KillEnemies"",
+                      ""enemy_faction"": ""TradingGuild"",
+                      ""required_amount"": 2,
+                      ""description"": ""Kill allies."" }");
+
+        var atWar = System.Array.Empty<string>();
+        var rep   = new System.Collections.Generic.Dictionary<string, int>
+        {
+            { "TradingGuild", 100 },
+        };
+        var ex = Assert.Throws<LlmValidationException>(
+            () => new ResponseValidator().Parse(payload, atWar, rep));
+        Assert.Contains("enemy_faction", ex.Message);
+    }
 }

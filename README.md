@@ -34,7 +34,7 @@ make clean             # removes bin/ obj/ dist/
 | `Llm` | `Enabled` | `false` | Master switch for LLM-authored broker dialogue. When false, no broker is injected anywhere. |
 | `Llm` | `BaseUrl` | _(empty)_ | OpenAI-compatible endpoint base, e.g. `https://host/v1`. Blank disables LLM dispatch. |
 | `Llm` | `Model` | `qwen` | Model identifier passed in the chat completions request body. |
-| `Llm` | `TimeoutSeconds` | `15` | Per-call timeout. On expiry the call is cancelled and no broker is injected. |
+| `Llm` | `TimeoutSeconds` | `60` | Per-call timeout. On expiry the call is cancelled and no broker is injected. Dispatch is fire-and-forget on a background task, so a larger value just raises the success rate — bump if your backend is slow or thinking tokens are enabled. |
 | `Llm` | `ApiKey` | _(empty)_ | Optional Bearer token. Never logged in cleartext (only as `<set>`/`<empty>`). |
 | `Llm` | `EnableThinking` | `false` | Passed as `chat_template_kwargs.enable_thinking` for vLLM Qwen. Harmless on other backends. |
 | `Llm` | `MaxTokens` | `1200` | Token ceiling on the completion. |
@@ -72,7 +72,7 @@ Every LLM failure path is logged and **no broker is injected** — there's no st
 
 ## Troubleshooting
 
-- **No `[vganima]` lines in log** — plugin didn't load. Check `VGAnima.dll` is in `BepInEx/plugins/VGAnima/` and BepInEx itself logs in `BepInEx/LogOutput.log`.
+- **No `Vanguard Galaxy Anima` lines in log** — plugin didn't load. Check `VGAnima.dll` is in `BepInEx/plugins/VGAnima/` and BepInEx itself logs in `BepInEx/LogOutput.log`.
 - **Boot log shows `LLM enabled: no`** — set `Llm.Enabled=true` AND `Llm.BaseUrl=...` in `vganima.cfg`. Both must be filled.
 - **Broker never appears** — check the boot log confirmed `LLM enabled: yes`, then watch for the LLM dispatch line: `Dispatching LLM for broker at '<station>'`. If that line is missing the probability roll failed (`MissionChance` < 1.0) or a vanilla NPC is hogging the seat budget.
 - **`FileNotFoundException: System.Text.Json`** — you're running an older build that shipped STJ. Re-deploy the current `VGAnima.dll` — current builds use `Newtonsoft.Json` (bundled by the game) and no longer need STJ.

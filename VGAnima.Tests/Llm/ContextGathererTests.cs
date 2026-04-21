@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using VGAnima.Llm;
 using Xunit;
 
@@ -187,5 +188,77 @@ public class ContextGathererTests
         Assert.Equal(86400 * 3 + 7200, ctx.Time.ElapsedSeconds);
         // DayOfYear is literal: elapsed / 86400 mod 365 + 1. 3 full days → 4.
         Assert.Equal(4, ctx.Time.DayOfYear);
+    }
+
+    [Fact]
+    public void Gather_Factions_ClassifiesRelationByVanillaThresholds()
+    {
+        var view = new FakeGameStateView
+        {
+            AtWar = new[] { "Amalgam" },
+            Reputation = new Dictionary<string, int>
+            {
+                ["Marauders"]    = -11485,  // rep < -500 → hostile
+                ["Fanatics"]     = -501,    // just barely hostile
+                ["HolyRadicals"] = -500,    // exactly -500 → still neutral (strict <)
+                ["MercenaryGuild"] = -200,  // neutral (don't-like band)
+                ["MiningGuild"]  = 0,       // neutral (zero)
+                ["TradingGuild"] = 100,     // friendly
+                ["Stranded"]     = 15000,   // friendly
+                ["Amalgam"]      = 0,       // rep 0 but at-war → hostile
+            },
+        };
+        var ctx = new ContextGatherer().Gather(view, Broker());
+
+        Assert.Equal("hostile",  ctx.Factions["Marauders"].Relation);
+        Assert.Equal("hostile",  ctx.Factions["Fanatics"].Relation);
+        Assert.Equal("neutral",  ctx.Factions["HolyRadicals"].Relation);
+        Assert.Equal("neutral",  ctx.Factions["MercenaryGuild"].Relation);
+        Assert.Equal("neutral",  ctx.Factions["MiningGuild"].Relation);
+        Assert.Equal("friendly", ctx.Factions["TradingGuild"].Relation);
+        Assert.Equal("friendly", ctx.Factions["Stranded"].Relation);
+        Assert.Equal("hostile",  ctx.Factions["Amalgam"].Relation);  // at_war overrides rep
+    }
+
+    [Fact]
+    public void Gather_Factions_CarriesDisplayNameAndRawRep()
+    {
+        var view = new FakeGameStateView
+        {
+            AtWar = new List<string>(),
+            Reputation = new Dictionary<string, int> { ["Marauders"] = -11485 },
+        };
+        var ctx = new ContextGatherer().Gather(view, Broker());
+
+        var entry = ctx.Factions["Marauders"];
+        Assert.Equal("Corsair Syndicate", entry.DisplayName);
+        Assert.Equal(-11485, entry.Reputation);
+    }
+
+    [Fact]
+    public void Gather_Factions_IncludesAtWarEvenWithoutRepEntry()
+    {
+        var view = new FakeGameStateView
+        {
+            AtWar = new[] { "Amalgam" },
+            Reputation = new Dictionary<string, int>(),
+        };
+        var ctx = new ContextGatherer().Gather(view, Broker());
+
+        Assert.True(ctx.Factions.ContainsKey("Amalgam"));
+        Assert.Equal("hostile", ctx.Factions["Amalgam"].Relation);
+    }
+
+    [Fact]
+    public void Gather_RewardClamps_MirrorValidatorConstants()
+    {
+        var ctx = new ContextGatherer().Gather(new FakeGameStateView(), Broker());
+
+        Assert.Equal(15,   ctx.RewardClamps.CreditsBaseValueMin);
+        Assert.Equal(100,  ctx.RewardClamps.CreditsBaseValueMax);
+        Assert.Equal(30,   ctx.RewardClamps.ExperienceBaseValueMin);
+        Assert.Equal(100,  ctx.RewardClamps.ExperienceBaseValueMax);
+        Assert.Equal(-500, ctx.RewardClamps.ReputationAmountMin);
+        Assert.Equal(500,  ctx.RewardClamps.ReputationAmountMax);
     }
 }

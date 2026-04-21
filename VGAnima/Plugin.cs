@@ -22,13 +22,17 @@ public class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "vganima";
     public const string PluginName = "Vanguard Galaxy Anima";
-    public const string PluginVersion = "0.1.0";
+    public const string PluginVersion = "0.2.0";
 
     internal static Plugin Instance { get; private set; } = null!;
     internal static ManualLogSource Log { get; private set; } = null!;
 
     internal AnimaConfig Cfg { get; private set; } = null!;
-    internal IMissionAssigner Assigner { get; private set; } = null!;
+
+    /// <summary>v2-mission: post-LLM mission builder + registrar. Replaces
+    /// the v1 <see cref="IMissionAssigner"/> slot.</summary>
+    internal LlmMissionAssigner MissionAssigner { get; private set; } = null!;
+
     internal IPitchProvider PitchProvider { get; private set; } = null!;
     internal IGamePlayerView PlayerView { get; private set; } = null!;
     internal VgttsBridge Vgtts { get; private set; } = null!;
@@ -49,24 +53,25 @@ public class Plugin : BaseUnityPlugin
 
         Cfg = new AnimaConfig(Config);
 
-        // Register plugin-authored StoryMissions before any save loads so
-        // Mission.FromJson(string) can rehydrate them (vanilla registry
-        // lookup throws KeyNotFoundException if the storyId is missing).
+        // Register the legacy TestStoryMissions factory so in-flight saves
+        // with the v1 storyId `vganima_test_jobsite_survey` rehydrate
+        // cleanly (spec §12 recommendation 1). The factory is marked
+        // [Obsolete]; suppression is local so the rest of the build stays
+        // warning-clean.
+#pragma warning disable CS0618
         TestStoryMissions.Register();
+#pragma warning restore CS0618
 
-        Assigner      = new TestMissionAssigner();
-        PlayerView    = new GamePlayerView();
-        Vgtts         = new VgttsBridge();
-        Registry      = new ConversionRegistry<BarPatron, ConversionRecord>();
+        MissionAssigner = new LlmMissionAssigner();
+        PlayerView      = new GamePlayerView();
+        Vgtts           = new VgttsBridge();
+        Registry        = new ConversionRegistry<BarPatron, ConversionRecord>();
 
         GameStateView = new GameStateView();
         Gatherer      = new ContextGatherer();
         Validator     = new ResponseValidator();
         Scheduler     = gameObject.AddComponent<UnityMainThreadScheduler>();
 
-        // LlmClient stays null when the master switch is off or BaseUrl is blank —
-        // BarRefreshPatches treats null as "LLM disabled, log and skip" per
-        // spec §10 (see docs/superpowers/notes/... if we ever re-document).
         if (Cfg.LlmEnabled.Value && !string.IsNullOrEmpty(Cfg.LlmBaseUrl.Value))
         {
             LlmClient = new HttpLlmClient(
@@ -79,9 +84,6 @@ public class Plugin : BaseUnityPlugin
                 timeout:        TimeSpan.FromSeconds(Cfg.LlmTimeoutSeconds.Value));
         }
 
-        // LlmPitchProvider looks up LlmStory by NPC name via the registry.
-        // FindByValue is O(N); number of live brokers is <10 at all times,
-        // so this is comfortably sub-millisecond.
         PitchProvider = new LlmPitchProvider(name =>
         {
             var rec = Registry.FindByValue(r => r.Station != null && name != null &&
@@ -90,8 +92,8 @@ public class Plugin : BaseUnityPlugin
             return rec?.LlmStory;
         });
 
-        Log.LogInfo($"[vganima] VGTTS detected: {(Vgtts.IsAvailable ? "yes" : "no")}");
-        Log.LogInfo($"[vganima] LLM enabled: {(LlmClient != null ? "yes" : "no")}  " +
+        Log.LogInfo($"VGTTS detected: {(Vgtts.IsAvailable ? "yes" : "no")}");
+        Log.LogInfo($"LLM enabled: {(LlmClient != null ? "yes" : "no")}  " +
                     $"Chance: {Cfg.MissionChance.Value}  " +
                     $"BaseUrl: {(string.IsNullOrEmpty(Cfg.LlmBaseUrl.Value) ? "(unset)" : Cfg.LlmBaseUrl.Value)}  " +
                     $"Model: {Cfg.LlmModel.Value}  " +
@@ -115,9 +117,6 @@ public class Plugin : BaseUnityPlugin
         if (LlmClient is IDisposable disposable) disposable.Dispose();
     }
 
-    /// <summary>Loggable marker for an optional API key — never emits the key
-    /// itself. Used in the boot log so operators can confirm whether auth is
-    /// wired without leaking the token into BepInEx's log file.</summary>
     internal static string RedactApiKey(string? apiKey) =>
         string.IsNullOrEmpty(apiKey) ? "<empty>" : "<set>";
 }

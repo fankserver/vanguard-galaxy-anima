@@ -11,17 +11,18 @@ namespace VGAnima.Cache;
 ///     <item>The source <see cref="SpaceStation"/> the broker was injected at
 ///       (used for rolloff eviction, departure cleanup, and broker identification
 ///       via seed prefix).</item>
-///     <item>The single vanilla <c>storyId</c> this broker offers — one of
-///       <c>SideMissionPatrol</c> / <c>SideMissionBounty</c> / <c>SideMissionFastLane</c>
-///       OR <c>vganima_test_jobsite_survey</c>. One broker owns exactly one mission
-///       (Option A contract).</item>
-///     <item>Optional <see cref="LlmStory"/> — the validated LLM-authored dialogue
-///       (v1: pitch / check_in / payout strings). Null for rehydrated brokers until
-///       a fresh LLM call lands, and null on test paths that don't run the LLM.
-///       Non-null on the happy broker-injection path once Task 8 lands.</item>
+///     <item>The unique <c>storyId</c> for this broker's LLM-authored mission.
+///       Minted by <see cref="VGAnima.Missions.LlmMissionAssigner"/> after the
+///       LLM call validates and the Mission is built+registered; never rewritten.
+///       Legacy v1 records (with fixed <c>vganima_test_jobsite_survey</c>) still
+///       load via <see cref="VGAnima.Missions.TestStoryMissions"/>.</item>
+///     <item>The validated <see cref="LlmStory"/> — dialogue + optional
+///       <see cref="LlmMissionBlock"/>. For v2-mission responses the Mission
+///       block is already materialized as a live registered Mission; the block
+///       is kept here only for diagnostics / future save serialization.</item>
 ///   </list>
-/// Not persisted — derived on bar open from the seed prefix + assigner; LlmStory
-/// dies with the record (eviction or departure) and is re-synthesised on the next
+/// Not persisted — derived on bar open from the seed prefix; LlmStory dies
+/// with the record (eviction or departure) and is re-synthesised on the next
 /// injection of the same seed.</summary>
 internal sealed class ConversionRecord
 {

@@ -5,34 +5,50 @@ using Newtonsoft.Json.Linq;
 
 namespace VGAnima.Llm;
 
-/// <summary>Strict parser + validator for v1 LLM output. Every rule from
-/// spec §2 and §8 is enforced in order, with the first failure raising
-/// <see cref="LlmValidationException"/> carrying a message that pinpoints
-/// field + rule.
+/// <summary>Strict parser + validator for LLM output. Dispatches on the
+/// <c>schema</c> field: <c>vganima/story/v1</c> produces a dialogue-only
+/// <see cref="LlmStory"/>, <c>vganima/mission/v1</c> additionally parses
+/// the <c>mission</c> sub-object via <see cref="MissionBlockValidator"/>.
 ///
-/// Rule order:
-///   1. Raw content parses as JSON.
-///   2. Root is a JSON object (not array, not scalar, not null).
-///   3. <c>schema</c> field exists and equals <c>"vganima/story/v1"</c>.
-///   4. Exactly the fields <c>{schema, pitch, check_in, payout}</c> are present.
-///   5. Each of <c>pitch</c>/<c>check_in</c>/<c>payout</c> is an array of strings
-///      within size bounds (3-5 / 1-2 / 2-4).
-///   6. Each string: non-empty after trim, all chars less than 128, max 120 chars,
-///      no leading or trailing whitespace.
+/// The dialogue rules (pitch / check_in / payout sizes + ASCII) are identical
+/// across schemas. The v2 schema adds exactly one required top-level field
+/// (<c>mission</c>) to the strict keyset.
 ///
-/// Uses <see cref="Newtonsoft.Json.Linq.JToken"/> rather than System.Text.Json —
-/// Unity 6000.2's Mono profile VTable-faults on STJ 8.x's Utf8JsonWriter.
-/// Newtonsoft is bundled by the game, so no runtime dep shipping needed.</summary>
+/// Cross-context hostility inputs (<c>atWar</c>, <c>reputation</c>) are
+/// optional — null means "skip the enemy_faction-is-friendly check". Unit
+/// tests without a full context pass null; the orchestrator in
+/// <see cref="VGAnima.Patches.BarRefreshPatches"/> threads real values in.
+///
+/// Uses <see cref="Newtonsoft.Json.Linq.JToken"/> (game-provided Newtonsoft)
+/// — see comment in the v1 header for why System.Text.Json is off-limits on
+/// Unity 6000.2's Mono profile.</summary>
 internal sealed class ResponseValidator
 {
-    public const string ExpectedSchema = "vganima/story/v1";
+    public const string ExpectedSchemaV1 = "vganima/story/v1";
+    public const string ExpectedSchemaV2 = "vganima/mission/v1";
 
-    private static readonly HashSet<string> AllowedKeys = new()
+    private static readonly HashSet<string> DialogueKeys = new()
     {
         "schema", "pitch", "check_in", "payout",
     };
 
+    private static readonly HashSet<string> MissionKeys = new()
+    {
+        "schema", "pitch", "check_in", "payout", "mission",
+    };
+
+    private readonly MissionBlockValidator _missionValidator = new();
+
+    /// <summary>Parse with no cross-context — hostile-faction rule in the
+    /// mission-block validator is skipped. Used by tests and for the v1
+    /// dialogue-only path.</summary>
     public LlmStory Parse(string rawContent)
+        => Parse(rawContent, atWar: null, reputation: null);
+
+    public LlmStory Parse(
+        string rawContent,
+        IReadOnlyList<string>? atWar,
+        IReadOnlyDictionary<string, int>? reputation)
     {
         JToken root;
         try
@@ -51,36 +67,46 @@ internal sealed class ResponseValidator
 
         var obj = (JObject)root;
 
-        // Rule 3: schema presence + value.
         if (!obj.TryGetValue("schema", out var schemaTok))
             throw new LlmValidationException("missing field `schema`");
         if (schemaTok.Type != JTokenType.String)
             throw new LlmValidationException("field `schema` must be a string");
+
         var schemaValue = schemaTok.Value<string>();
-        if (schemaValue != ExpectedSchema)
-            throw new LlmValidationException(
-                $"field `schema` must equal \"{ExpectedSchema}\", got \"{schemaValue}\"");
-
-        // Rule 4: exactly the allowed keys — no more, no less.
-        foreach (var prop in obj.Properties())
+        var expectedKeys = schemaValue switch
         {
-            if (!AllowedKeys.Contains(prop.Name))
-                throw new LlmValidationException(
-                    $"unexpected top-level field `{prop.Name}` (v1 schema is strict)");
-        }
+            ExpectedSchemaV1 => DialogueKeys,
+            ExpectedSchemaV2 => MissionKeys,
+            _                => throw new LlmValidationException(
+                                    $"field `schema` must be \"{ExpectedSchemaV1}\" "
+                                    + $"or \"{ExpectedSchemaV2}\", got \"{schemaValue}\""),
+        };
 
-        if (!obj.TryGetValue("pitch", out var pitchTok))
-            throw new LlmValidationException("missing field `pitch`");
-        if (!obj.TryGetValue("check_in", out var checkInTok))
-            throw new LlmValidationException("missing field `check_in`");
-        if (!obj.TryGetValue("payout", out var payoutTok))
-            throw new LlmValidationException("missing field `payout`");
+        foreach (var prop in obj.Properties())
+            if (!expectedKeys.Contains(prop.Name))
+                throw new LlmValidationException(
+                    $"unexpected top-level field `{prop.Name}` (schema is strict)");
+
+        if (!obj.TryGetValue("pitch",    out var pitchTok))    throw new LlmValidationException("missing field `pitch`");
+        if (!obj.TryGetValue("check_in", out var checkInTok))  throw new LlmValidationException("missing field `check_in`");
+        if (!obj.TryGetValue("payout",   out var payoutTok))   throw new LlmValidationException("missing field `payout`");
 
         var pitch   = ReadStringArray("pitch",    pitchTok,   minCount: 3, maxCount: 5);
         var checkIn = ReadStringArray("check_in", checkInTok, minCount: 1, maxCount: 2);
         var payout  = ReadStringArray("payout",   payoutTok,  minCount: 2, maxCount: 4);
 
-        return new LlmStory(pitch, checkIn, payout);
+        LlmMissionBlock? mission = null;
+        if (schemaValue == ExpectedSchemaV2)
+        {
+            if (!obj.TryGetValue("mission", out var missionTok))
+                throw new LlmValidationException("missing field `mission`");
+            mission = _missionValidator.Parse(
+                missionTok,
+                atWar      ?? Array.Empty<string>(),
+                reputation ?? new Dictionary<string, int>());
+        }
+
+        return new LlmStory(pitch, checkIn, payout, mission);
     }
 
     private static IReadOnlyList<string> ReadStringArray(string fieldName, JToken token, int minCount, int maxCount)

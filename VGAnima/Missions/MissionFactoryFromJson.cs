@@ -1,0 +1,244 @@
+using System;
+using Source.Galaxy;
+using Source.Galaxy.POI;
+using Source.Item;
+using Source.MissionSystem;
+using Source.MissionSystem.Objectives;
+using Source.MissionSystem.Rewards;
+using Source.Util;
+using VGAnima.Llm;
+// Disambiguate between the reward type and the registry type sharing the
+// short name "StoryMission".
+using StoryMissionRegistry = Source.MissionSystem.StoryMission;
+// `Reputation` is ambiguous — both `Source.MissionSystem.Objectives` and
+// `Source.MissionSystem.Rewards` define a type by that name. Alias the
+// reward variant (the one we construct below).
+using ReputationReward = Source.MissionSystem.Rewards.Reputation;
+
+namespace VGAnima.Missions;
+
+/// <summary>Translates a validated <see cref="LlmMissionBlock"/> into a live
+/// <see cref="Mission"/> instance. Called on the Unity main thread from the
+/// factory delegate the plugin registers via <c>StoryMission.Add</c> at
+/// broker-injection time.
+///
+/// Faction identifiers and item categories are resolved via vanilla APIs
+/// (<c>Faction.Get</c>, <c>Enum.Parse&lt;ItemCategory&gt;</c>). The Task 2
+/// whitelists have already filtered the values, so these calls always
+/// succeed under normal operation — any failure here (e.g. game updated the
+/// faction registry) surfaces as an exception caught by the caller's
+/// try/catch in <see cref="VGAnima.Patches.BarRefreshPatches"/>.
+///
+/// Spec §6.</summary>
+internal static class MissionFactoryFromJson
+{
+    /// <summary>Builds the Mission from a validated block. All decomp-typed
+    /// touches happen here; tests call this directly (skipping the caller's
+    /// <c>StoryMission.Add</c> path) and assert on the returned Mission's
+    /// field values.</summary>
+    /// <param name="missionLevel">Area level the reward math anchors to —
+    /// read from <c>brokerStation.level</c> in production. Matches vanilla's
+    /// <c>MissionGenerator</c> path (procedural board missions), not
+    /// <c>SideMissions</c> (story loops using player level). Passing area
+    /// level activates the built-in XP over-level penalty in
+    /// <c>GameMath.GetExperienceRewardValue</c>, which zeros out XP for
+    /// players &gt;3 levels above the station.</param>
+    /// <param name="brokerStation">May be null in unit tests — production
+    /// always passes the SpaceStation the broker was injected at.</param>
+    public static Mission Build(
+        LlmMissionBlock block,
+        int missionLevel,
+        SpaceStation? brokerStation,
+        string brokerSeed)
+    {
+        var mission = new Mission
+        {
+            name            = block.Name,
+            description     = block.Description,
+            completionText  = block.CompletionText,
+            sourceFaction   = Faction.Get(block.SourceFaction),
+            sourcePoi       = brokerStation,
+            turnIn          = brokerStation,
+            trackedOnHud    = true,
+            difficulty      = MissionDifficulty.Story,
+            iconName        = "Combat",
+            canBeIdled      = false,
+            // Area-anchored, not player-anchored. dynamicLevel=true would make
+            // Mission.level return GamePlayer.current.level on every access;
+            // we want the station's level so damage/loot/etc. also stay put.
+            dynamicLevel    = false,
+            storyId         = BuildStoryId(brokerStation, brokerSeed),
+        };
+
+        foreach (var stepBlock in block.Steps)
+        {
+            var step = new MissionStep();
+            if (brokerStation != null) step.system = brokerStation.system;
+            foreach (var objBlock in stepBlock.Objectives)
+                step.objectives.Add(BuildObjective(objBlock, step, brokerStation));
+            mission.steps.Add(step);
+        }
+
+        foreach (var rewardBlock in block.Rewards)
+        {
+            var reward = BuildReward(rewardBlock, missionLevel);
+            mission.rewards.Add(reward);
+            LogRewardResolution(rewardBlock, reward, missionLevel);
+        }
+
+        return mission;
+    }
+
+    /// <summary>Emits a LogDebug line showing the LLM's base_value input and
+    /// the resolved amount GameMath produced, plus the missionLevel fed into
+    /// the formula. Gives the operator the exact numbers to spot-check
+    /// anomalies (e.g. 16k XP on a "level 1" mission → actual missionLevel
+    /// was not 1).</summary>
+    private static void LogRewardResolution(LlmReward input, MissionReward output, int missionLevel)
+    {
+        try
+        {
+            string line = input switch
+            {
+                LlmCreditsReward c when output is Credits cr =>
+                    $"Reward[Credits]: base_value={c.BaseValue} missionLevel={missionLevel} → amount={cr.amount}",
+                LlmExperienceReward e when output is Experience ex =>
+                    $"Reward[Experience]: base_value={e.BaseValue} missionLevel={missionLevel} → amount={ex.amount}",
+                LlmReputationReward r when output is ReputationReward rp =>
+                    $"Reward[Reputation]: faction={r.Faction} amount={rp.amount} (no scaling)",
+                _ => $"Reward[?]: input={input.GetType().Name} output={output.GetType().Name}",
+            };
+            VGAnima.Plugin.Log?.LogDebug(line);
+        }
+        catch
+        {
+            // Logging must never throw — swallowed. Under unit tests Plugin.Log
+            // may be null (Plugin isn't constructed outside BepInEx runtime).
+        }
+    }
+
+    /// <summary>Deterministic-per-broker but always-unique storyId:
+    /// <c>vganima_llm_{station.guid}_{brokerSeed}_{guid}</c>. The trailing
+    /// Guid.NewGuid avoids collisions across re-rolls. Station may be null
+    /// in tests.</summary>
+    private static string BuildStoryId(SpaceStation? station, string brokerSeed)
+    {
+        var stationPart = station?.guid ?? "nullstation";
+        var tail        = Guid.NewGuid().ToString("N");
+        return $"vganima_llm_{stationPart}_{brokerSeed}_{tail}";
+    }
+
+    /// <summary>Builds a vanilla <see cref="MissionObjective"/> from the
+    /// LLM block. Some cases mutate <paramref name="step"/> as a side effect
+    /// — specifically <see cref="LlmClearPoi"/> spawns a <c>Combat</c> POI
+    /// in the broker-station's system and pins it to the step via
+    /// <c>dynamicPointOfInterest</c>. That's the vanilla pattern
+    /// (<see href="BountyHunt.GenerateMission"/>) for "fly to a spot on the
+    /// map and clear it" missions.</summary>
+    private static MissionObjective BuildObjective(
+        LlmObjective block, MissionStep step, SpaceStation? brokerStation)
+    {
+        switch (block)
+        {
+            case LlmKillEnemies k:
+                return new KillEnemies
+                {
+                    enemyFaction   = Faction.Get(k.EnemyFaction),
+                    requiredAmount = k.RequiredAmount,
+                    // KillEnemies has no `description` field — vanilla composes
+                    // statusText from a translation key. We surface the LLM's
+                    // description at mission.description level instead (already
+                    // copied above). Drop k.Description here intentionally.
+                };
+
+            case LlmProtectUnit p:
+                return new ProtectUnit
+                {
+                    protectText    = p.ProtectText,
+                    requiredAmount = 1,  // ProtectUnit inherits from TriggerObjective;
+                                         // default requiredAmount is 1.
+                };
+
+            case LlmTriggerObjective t:
+                return new TriggerObjective
+                {
+                    trigger        = Enum.Parse<MissionTrigger>(t.Trigger),
+                    requiredAmount = t.RequiredAmount,
+                    description    = t.Description,
+                };
+
+            case LlmCollectItemTypes c:
+                return new CollectItemTypes
+                {
+                    itemCategory   = Enum.Parse<ItemCategory>(c.ItemCategory),
+                    requiredAmount = c.RequiredAmount,
+                };
+
+            case LlmClearPoi cp:
+                return BuildClearPoi(cp, step, brokerStation);
+
+            default:
+                throw new InvalidOperationException(
+                    $"unknown validated objective type {block.GetType().Name}");
+        }
+    }
+
+    /// <summary>Mirrors vanilla <c>BountyHunt.GenerateMission</c>: spawns a
+    /// <c>Combat</c> POI in the broker-station's system, seeds it with a
+    /// combat-ship payload, pins it to the step, and returns a
+    /// <c>KillEnemies</c> whose <c>requiredAmount</c> is the spawn's
+    /// <c>totalUnitCount</c>. The player sees a new icon on the system map,
+    /// flies there, and the step auto-completes when the area is clear.</summary>
+    private static MissionObjective BuildClearPoi(
+        LlmClearPoi block, MissionStep step, SpaceStation? brokerStation)
+    {
+        if (brokerStation == null)
+            throw new InvalidOperationException(
+                "ClearPoi requires a broker station to spawn the Combat POI into");
+
+        var enemyFaction = Faction.Get(block.EnemyFaction);
+        var combat       = brokerStation.system.AddCombat(enemyFaction);
+        combat.AddGuards(combat.CreateUnitPayload(1f, GameplayType.Combat));
+        step.dynamicPointOfInterest = combat;
+
+        return new KillEnemies
+        {
+            enemyFaction   = enemyFaction,
+            requiredAmount = combat.totalUnitCount,
+        };
+    }
+
+    private static MissionReward BuildReward(LlmReward block, int missionLevel)
+    {
+        switch (block)
+        {
+            case LlmCreditsReward c:
+                return new Credits
+                {
+                    amount = GameMath.GetCreditsValue(c.BaseValue, missionLevel),
+                };
+
+            case LlmExperienceReward e:
+                return new Experience
+                {
+                    amount = GameMath.GetExperienceRewardValue(e.BaseValue, missionLevel),
+                };
+
+            case LlmReputationReward r:
+                return new ReputationReward
+                {
+                    faction = Faction.Get(r.Faction),
+                    amount  = r.Amount,
+                };
+
+            default:
+                throw new InvalidOperationException(
+                    $"unknown validated reward type {block.GetType().Name}");
+        }
+    }
+
+    // Suppress the "unused alias" warning — the using is kept to document
+    // the intent that this class DOES NOT call StoryMission.Add itself; the
+    // caller wires the factory into the registry.
+    private static readonly Type _keepRegistryAlias = typeof(StoryMissionRegistry);
+}

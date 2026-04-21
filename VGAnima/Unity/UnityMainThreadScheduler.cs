@@ -78,7 +78,7 @@ internal sealed class UnityMainThreadScheduler : MonoBehaviour
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogError($"[vganima] UnityMainThreadScheduler action threw: {ex}");
+                Plugin.Log.LogError($"UnityMainThreadScheduler action threw: {ex}");
             }
         }
     }

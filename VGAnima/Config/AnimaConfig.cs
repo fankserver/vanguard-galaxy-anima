@@ -32,8 +32,10 @@ internal sealed class AnimaConfig
             "OpenAI-compatible endpoint base, e.g. https://host/v1. Blank disables LLM dispatch.");
         LlmModel = cf.Bind("Llm", "Model", "qwen",
             "Model identifier passed in the chat completions request body.");
-        LlmTimeoutSeconds = cf.Bind("Llm", "TimeoutSeconds", 15,
-            "Per-call timeout. On expiry the call is cancelled and no broker is injected.");
+        LlmTimeoutSeconds = cf.Bind("Llm", "TimeoutSeconds", 60,
+            "Per-call timeout. On expiry the call is cancelled and no broker is injected. " +
+            "Dispatch is fire-and-forget on a background task so a generous value only raises " +
+            "the success rate — bump if your backend is slow or thinking tokens are enabled.");
         LlmApiKey = cf.Bind("Llm", "ApiKey", string.Empty,
             "Optional Bearer token. Never logged in cleartext (only as <set>/<empty>).");
         LlmEnableThinking = cf.Bind("Llm", "EnableThinking", false,

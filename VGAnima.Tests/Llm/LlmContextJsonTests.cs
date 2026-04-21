@@ -29,12 +29,47 @@ public class LlmContextJsonTests
         // Every v1-spec top-level key must survive the roundtrip.
         foreach (var key in new[]
         {
-            "player", "fleet", "cargo_contents", "location", "reputation",
-            "at_war", "missions", "story_arcs_active", "waypoints", "time", "broker",
+            "player", "fleet", "cargo_contents", "location",
+            "factions", "reward_clamps", "mission_guidance",
+            "missions", "story_arcs_active", "waypoints", "time", "broker",
         })
         {
             Assert.True(root.ContainsKey(key), $"missing top-level key `{key}` in serialized LlmContext");
         }
+    }
+
+    [Fact]
+    public void Serializes_RewardClampsSectionKeysPresent()
+    {
+        var ctx = BuildMinimal();
+        var clamps = (JObject)JObject.Parse(JsonConvert.SerializeObject(ctx))["reward_clamps"]!;
+
+        foreach (var key in new[]
+        {
+            "credits_base_value_min", "credits_base_value_max",
+            "experience_base_value_min", "experience_base_value_max",
+            "reputation_amount_min", "reputation_amount_max",
+        })
+        {
+            Assert.True(clamps.ContainsKey(key), $"missing reward_clamps.{key}");
+        }
+    }
+
+    [Fact]
+    public void Serializes_FactionEntryShape()
+    {
+        var ctx = BuildMinimal();
+        ctx.Factions = new Dictionary<string, LlmFactionEntry>
+        {
+            ["Marauders"] = new("Corsair Syndicate", "hostile", -11485),
+        };
+        var entry = (JObject)((JObject)JObject.Parse(JsonConvert.SerializeObject(ctx))["factions"]!)["Marauders"]!;
+
+        foreach (var key in new[] { "display_name", "relation", "reputation" })
+            Assert.True(entry.ContainsKey(key), $"missing factions.Marauders.{key}");
+        Assert.Equal("Corsair Syndicate", (string)entry["display_name"]!);
+        Assert.Equal("hostile",           (string)entry["relation"]!);
+        Assert.Equal(-11485,              (int)entry["reputation"]!);
     }
 
     [Fact]
@@ -130,8 +165,19 @@ public class LlmContextJsonTests
                 Quadrant = 1,
                 ConnectedSystems = new List<LlmSystemSnapshot>(),
             },
-            Reputation = new Dictionary<string, int>(),
-            AtWar = new List<string>(),
+            Factions = new Dictionary<string, LlmFactionEntry>(),
+            RewardClamps = new LlmRewardClampsSection
+            {
+                CreditsBaseValueMin = 15, CreditsBaseValueMax = 100,
+                ExperienceBaseValueMin = 30, ExperienceBaseValueMax = 100,
+                ReputationAmountMin = -500, ReputationAmountMax = 500,
+            },
+            MissionGuidance = new LlmMissionGuidance
+            {
+                ArchetypeWeights    = new Dictionary<string, double>(),
+                ForbiddenArchetypes = new List<string>(),
+                Rationale           = new List<string>(),
+            },
             Missions = new LlmMissionsSection
             {
                 ActiveStoryIds = new List<string>(),

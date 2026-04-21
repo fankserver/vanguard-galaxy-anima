@@ -55,7 +55,7 @@ internal static class SalesmanPatches
             if (state == BrokerState.ReadyToClaim && activeMission == null)
             {
                 Plugin.Log.LogDebug(
-                    $"[vganima] '{__instance.name}' ReadyToClaim but no active mission for " +
+                    $"'{__instance.name}' ReadyToClaim but no active mission for " +
                     $"storyId={record.StoryId}; falling through");
                 return true;
             }
@@ -102,14 +102,14 @@ internal static class SalesmanPatches
             };
 
             Plugin.Log.LogDebug(
-                $"[vganima] '{__instance.name}' state={state} storyId={record.StoryId} lines={lines.Count}");
+                $"'{__instance.name}' state={state} storyId={record.StoryId} lines={lines.Count}");
 
             Singleton<DialogueManager>.Instance.StartDialogue(lines, onComplete);
             return false;
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] InteractWithPatron_Prefix threw: {ex}");
+            Plugin.Log.LogError($"InteractWithPatron_Prefix threw: {ex}");
             return true;
         }
     }
@@ -123,15 +123,15 @@ internal static class SalesmanPatches
             var player = GamePlayer.current;
             if (player == null)
             {
-                Plugin.Log.LogWarning($"[vganima] AddMission: GamePlayer.current is null (storyId={storyId})");
+                Plugin.Log.LogWarning($"AddMission: GamePlayer.current is null (storyId={storyId})");
                 return;
             }
             player.AddMissionWithLog(storyId);
-            Plugin.Log.LogInfo($"[vganima] AddMissionWithLog({storyId}) dispatched via broker");
+            Plugin.Log.LogInfo($"AddMissionWithLog({storyId}) dispatched via broker");
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] AddMission threw: {ex}");
+            Plugin.Log.LogError($"AddMission threw: {ex}");
         }
     }
 
@@ -144,15 +144,15 @@ internal static class SalesmanPatches
             var player = GamePlayer.current;
             if (player == null)
             {
-                Plugin.Log.LogWarning($"[vganima] CompleteMission: GamePlayer.current is null (mission={mission?.name})");
+                Plugin.Log.LogWarning($"CompleteMission: GamePlayer.current is null (mission={mission?.name})");
                 return;
             }
             player.CompleteMission(mission);
-            Plugin.Log.LogInfo($"[vganima] CompleteMission('{mission?.name}') fired via broker");
+            Plugin.Log.LogInfo($"CompleteMission('{mission?.name}') fired via broker");
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] CompleteMission threw: {ex}");
+            Plugin.Log.LogError($"CompleteMission threw: {ex}");
         }
     }
 
@@ -172,7 +172,7 @@ internal static class SalesmanPatches
                 plugin.Vgtts.DropCache(speaker, text);
 
             Plugin.Log.LogInfo(
-                $"[vganima] Broker '{patron.name}' departed after storyId={record.StoryId} " +
+                $"Broker '{patron.name}' departed after storyId={record.StoryId} " +
                 $"resolved (removed from roster: {removed})");
 
             var barUI = UObject.FindAnyObjectByType<BarUI>();
@@ -180,7 +180,7 @@ internal static class SalesmanPatches
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] Depart threw: {ex}");
+            Plugin.Log.LogError($"Depart threw: {ex}");
         }
     }
 

@@ -19,7 +19,7 @@ internal sealed class ContextGatherer
 {
     public LlmContext Gather(IGameStateView view, BrokerInfo broker)
     {
-        return new LlmContext
+        var ctx = new LlmContext
         {
             Player = new LlmPlayerSection
             {
@@ -53,8 +53,16 @@ internal sealed class ContextGatherer
                 Quadrant          = view.Quadrant,
                 ConnectedSystems  = view.ConnectedSystems.Take(8).ToList(),
             },
-            Reputation = view.Reputation,
-            AtWar      = view.AtWar,
+            Factions   = BuildFactions(view.Reputation, view.AtWar),
+            RewardClamps = new LlmRewardClampsSection
+            {
+                CreditsBaseValueMin    = MissionBlockValidator.CreditsBaseMin,
+                CreditsBaseValueMax    = MissionBlockValidator.CreditsBaseMax,
+                ExperienceBaseValueMin = MissionBlockValidator.ExperienceBaseMin,
+                ExperienceBaseValueMax = MissionBlockValidator.ExperienceBaseMax,
+                ReputationAmountMin    = MissionBlockValidator.ReputationMin,
+                ReputationAmountMax    = MissionBlockValidator.ReputationMax,
+            },
             Missions = new LlmMissionsSection
             {
                 ActiveStoryIds       = view.ActiveStoryIds,
@@ -80,6 +88,45 @@ internal sealed class ContextGatherer
                 StationFaction = broker.StationFaction,
             },
         };
+        // Final pass: derive mission guidance from the fully-populated context.
+        // Must run last — reads every section.
+        ctx.MissionGuidance = MissionGuidanceBuilder.Build(ctx);
+        return ctx;
+    }
+
+    /// <summary>Builds the per-faction snapshot. Relation bands mirror
+    /// <c>FactionData.IsEnemy</c> (<c>rep &lt; -500 OR at_war</c> = hostile)
+    /// plus a friendly/neutral split at rep=0. Keys are all known
+    /// identifiers that appear either in <paramref name="reputation"/> or
+    /// <paramref name="atWar"/> — we don't synthesize unseen factions into
+    /// the dict.</summary>
+    private static IReadOnlyDictionary<string, LlmFactionEntry> BuildFactions(
+        IReadOnlyDictionary<string, int> reputation,
+        IReadOnlyList<string> atWar)
+    {
+        var atWarSet = new HashSet<string>(atWar);
+        var result   = new Dictionary<string, LlmFactionEntry>(reputation.Count + atWar.Count);
+
+        foreach (var kv in reputation)
+        {
+            result[kv.Key] = BuildEntry(kv.Key, kv.Value, atWarSet.Contains(kv.Key));
+        }
+        foreach (var f in atWar)
+        {
+            // at-war faction with no rep entry — record as hostile regardless.
+            if (!result.ContainsKey(f))
+                result[f] = BuildEntry(f, 0, isAtWar: true);
+        }
+        return result;
+    }
+
+    private static LlmFactionEntry BuildEntry(string identifier, int rep, bool isAtWar)
+    {
+        string relation;
+        if (isAtWar || rep < -500) relation = "hostile";
+        else if (rep > 0)          relation = "friendly";
+        else                       relation = "neutral";
+        return new LlmFactionEntry(FactionDisplayNames.Lookup(identifier), relation, rep);
     }
 
     private static IReadOnlyList<T> TakeLast<T>(IReadOnlyList<T> source, int n)

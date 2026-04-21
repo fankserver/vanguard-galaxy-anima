@@ -13,6 +13,7 @@ using Source.Galaxy.POI.Station;
 using Source.Galaxy.POI.Station.Patrons;
 using VGAnima.Cache;
 using VGAnima.Llm;
+using VGAnima.Missions;
 using VGAnima.Pitch;
 using UObject = UnityEngine.Object;
 
@@ -91,7 +92,7 @@ internal static class BarRefreshPatches
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] CheckUpdatePatrons_Postfix threw: {ex}");
+            Plugin.Log.LogError($"CheckUpdatePatrons_Postfix threw: {ex}");
         }
     }
 
@@ -112,7 +113,7 @@ internal static class BarRefreshPatches
                 plugin.Vgtts.DropCache(speaker, text);
 
             plugin.Registry.Remove(patron);
-            Plugin.Log.LogDebug($"[vganima] Evicted rolled-off broker '{patron.name}' (storyId={record.StoryId})");
+            Plugin.Log.LogDebug($"Evicted rolled-off broker '{patron.name}' (storyId={record.StoryId})");
         }
     }
 
@@ -126,21 +127,51 @@ internal static class BarRefreshPatches
 
         if (plugin.LlmClient == null)
         {
-            Plugin.Log.LogDebug("[vganima] LLM disabled; skipping broker injection");
+            Plugin.Log.LogDebug("LLM disabled; skipping broker injection");
             return;
         }
 
-        if (bar.availablePatrons.Count >= MaxTotalPatrons) return;
+        var stationForDebug = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
+        var stationNameForDebug = stationForDebug?.name ?? "<unknown>";
+        Plugin.Log.LogDebug(
+            $"StartInjectMissionBroker evaluating bar at '{stationNameForDebug}' " +
+            $"(patrons={bar.availablePatrons.Count}/{MaxTotalPatrons})");
+
+        if (bar.availablePatrons.Count >= MaxTotalPatrons)
+        {
+            Plugin.Log.LogDebug(
+                $"Bar at '{stationNameForDebug}' already at MaxTotalPatrons " +
+                $"({MaxTotalPatrons}); no injection");
+            return;
+        }
 
         // Idempotent: don't inject twice on re-entry.
         foreach (var p in bar.availablePatrons)
-            if (plugin.Registry.TryGet(p, out _)) return;
+        {
+            if (plugin.Registry.TryGet(p, out var existing))
+            {
+                Plugin.Log.LogDebug(
+                    $"Broker already present at '{stationNameForDebug}' " +
+                    $"(storyId={existing.StoryId}); skipping re-injection");
+                return;
+            }
+        }
 
-        var station = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
-        if (station == null) return;
+        var station = stationForDebug;
+        if (station == null)
+        {
+            Plugin.Log.LogDebug("Bar has no spaceStation field; skipping");
+            return;
+        }
 
         // Only inject when the player is docked at this station.
-        if (SpaceStation.current != station) return;
+        if (SpaceStation.current != station)
+        {
+            Plugin.Log.LogDebug(
+                $"Player not docked at '{station.name}' " +
+                $"(SpaceStation.current={SpaceStation.current?.name ?? "<null>"}); skipping");
+            return;
+        }
 
         // Stale saved-broker conflict detection — advise the user to advance
         // in-game time rather than auto-deleting (risk of nuking vanilla patrons).
@@ -151,7 +182,7 @@ internal static class BarRefreshPatches
         if (dupSeats.Count > 0 || dupNames.Count > 0)
         {
             Plugin.Log.LogWarning(
-                $"[vganima] Bar at '{station.name}' has stale duplicates: " +
+                $"Bar at '{station.name}' has stale duplicates: " +
                 $"names=[{string.Join(",", dupNames)}] seats=[{string.Join(",", dupSeats)}]. " +
                 $"Likely a broker saved by an older plugin version. " +
                 $"Advance in-game time (day-refresh) to clear the bar.");
@@ -161,7 +192,7 @@ internal static class BarRefreshPatches
         var barUI = UObject.FindAnyObjectByType<BarUI>();
         if (barUI == null)
         {
-            Plugin.Log.LogDebug("[vganima] BarUI not in scene yet; deferring broker injection");
+            Plugin.Log.LogDebug("BarUI not in scene yet; deferring broker injection");
             return;
         }
 
@@ -170,16 +201,22 @@ internal static class BarRefreshPatches
             .Value;
         if (sprites == null || sprites.Count == 0)
         {
-            Plugin.Log.LogWarning("[vganima] BarUI.patronSprites empty; aborting injection");
+            Plugin.Log.LogWarning("BarUI.patronSprites empty; aborting injection");
             return;
         }
 
         // Per-bar probability roll.
-        if (UnityEngine.Random.value > plugin.Cfg.MissionChance.Value)
+        var roll = UnityEngine.Random.value;
+        if (roll > plugin.Cfg.MissionChance.Value)
         {
-            Plugin.Log.LogDebug("[vganima] MissionChance roll failed, skipping bar injection");
+            Plugin.Log.LogDebug(
+                $"MissionChance roll {roll:F2} > {plugin.Cfg.MissionChance.Value:F2} " +
+                $"at '{station.name}'; no broker this refresh");
             return;
         }
+        Plugin.Log.LogDebug(
+            $"MissionChance roll {roll:F2} <= {plugin.Cfg.MissionChance.Value:F2} " +
+            $"at '{station.name}'; proceeding with injection");
 
         // Build the per-bar already-assigned set by scanning ALL current
         // patrons' registry entries — handles the edge case where pinned
@@ -194,14 +231,8 @@ internal static class BarRefreshPatches
         var brokerIndex = alreadyAssigned.Count;
         var candidateSeed = $"{BrokerSeedPrefix}{station.guid}-{brokerIndex}";
 
-        // Ask the assigner for a storyId.
-        var storyId = plugin.Assigner.Assign(candidateSeed, alreadyAssigned, plugin.PlayerView);
-        if (storyId == null)
-        {
-            Plugin.Log.LogDebug(
-                $"[vganima] Assigner returned null at '{station.name}' — no storyId available, skipping broker injection");
-            return;
-        }
+        // v2-mission: no pre-flight storyId decision. The LLM authors the
+        // mission, and LlmMissionAssigner registers it after validation.
 
         // Create the patron up-front (not added to the bar yet) so we know its
         // name + isMale for the broker section of the LLM context, and can
@@ -218,7 +249,7 @@ internal static class BarRefreshPatches
             .ToList();
         if (genderSeats.Count == 0)
         {
-            Plugin.Log.LogWarning($"[vganima] No patronSprites for isMale={newPatron.isMale}; aborting");
+            Plugin.Log.LogWarning($"No patronSprites for isMale={newPatron.isMale}; aborting");
             return;
         }
         var usedByAny = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
@@ -238,7 +269,7 @@ internal static class BarRefreshPatches
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] ContextGatherer threw at '{station.name}': {ex}");
+            Plugin.Log.LogError($"ContextGatherer threw at '{station.name}': {ex}");
             return;
         }
 
@@ -246,92 +277,180 @@ internal static class BarRefreshPatches
         var systemPrompt = BuildSystemPrompt();
         var userPrompt = BuildUserPrompt(contextJson, brokerInfo, station);
 
+        Plugin.Log.LogDebug(
+            $"Prompts built for '{station.name}' " +
+            $"(system={systemPrompt.Length}, user={userPrompt.Length}, context={contextJson.Length} chars)");
+
         // Fire and forget. The task continuation hops back to the main thread
         // via the scheduler; if the player leaves the station or the bar tears
         // down in the interim, the continuation no-ops.
         Plugin.Log.LogInfo(
-            $"[vganima] Dispatching LLM for broker at '{station.name}' " +
-            $"(storyId={storyId}, seed={candidateSeed})");
+            $"Dispatching LLM for broker at '{station.name}' " +
+            $"(seed={candidateSeed}, timeout={plugin.Cfg.LlmTimeoutSeconds.Value}s)");
 
-        _ = DispatchAsync(plugin, bar, station, newPatron, storyId, candidateSeed,
+        _ = DispatchAsync(plugin, bar, station, newPatron, candidateSeed,
             systemPrompt, userPrompt);
     }
 
     private static async Task DispatchAsync(
         Plugin plugin, Bar bar, SpaceStation station, Salesman newPatron,
-        string storyId, string candidateSeed,
+        string candidateSeed,
         string systemPrompt, string userPrompt)
     {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         string rawContent;
         try
         {
             rawContent = await plugin.LlmClient!
                 .CompleteAsync(systemPrompt, userPrompt, CancellationToken.None)
                 .ConfigureAwait(false);
+            stopwatch.Stop();
+            Plugin.Log.LogDebug(
+                $"LLM response received for '{station.name}' in {stopwatch.ElapsedMilliseconds}ms " +
+                $"({rawContent.Length} chars)");
         }
         catch (TaskCanceledException)
         {
+            stopwatch.Stop();
             Plugin.Log.LogWarning(
-                $"[vganima] LLM timeout after {plugin.Cfg.LlmTimeoutSeconds.Value}s; skipping broker at '{station.name}'");
+                $"LLM timeout after {stopwatch.ElapsedMilliseconds}ms " +
+                $"(limit={plugin.Cfg.LlmTimeoutSeconds.Value}s); skipping broker at '{station.name}'");
             return;
         }
         catch (System.Net.Http.HttpRequestException ex)
         {
+            stopwatch.Stop();
             Plugin.Log.LogWarning(
-                $"[vganima] LLM request failed: {ex.Message}; skipping broker at '{station.name}'");
+                $"LLM request failed after {stopwatch.ElapsedMilliseconds}ms: {ex.Message}; " +
+                $"skipping broker at '{station.name}'");
             return;
         }
         catch (Exception ex)
         {
+            stopwatch.Stop();
             Plugin.Log.LogError(
-                $"[vganima] LLM call threw; skipping broker at '{station.name}': {ex}");
+                $"LLM call threw after {stopwatch.ElapsedMilliseconds}ms; " +
+                $"skipping broker at '{station.name}': {ex}");
             return;
         }
 
         LlmStory story;
         try
         {
-            story = plugin.Validator.Parse(rawContent);
+            // Re-gather the hostility context so the validator can reject
+            // kill-ally missions. Uses the view directly (no cached copy)
+            // so the check races against actual current state — acceptable
+            // because reputation changes slowly and the cost is < 1ms.
+            IReadOnlyList<string>? atWar = null;
+            IReadOnlyDictionary<string, int>? reputation = null;
+            try
+            {
+                atWar      = plugin.GameStateView.AtWar;
+                reputation = plugin.GameStateView.Reputation;
+            }
+            catch (Exception gatherEx)
+            {
+                Plugin.Log.LogWarning(
+                    $"hostility context gather failed: {gatherEx.Message}; " +
+                    $"proceeding without enemy_faction cross-check");
+            }
+
+            story = plugin.Validator.Parse(rawContent, atWar, reputation);
         }
         catch (LlmValidationException ex)
         {
-            var preview = rawContent.Length > 500 ? rawContent.Substring(0, 500) : rawContent;
             Plugin.Log.LogInfo(
-                $"[vganima] LLM response failed validation: {ex.Message}; " +
-                $"skipping broker at '{station.name}'. First 500 chars: {preview}");
+                $"LLM response failed validation: {ex.Message}; " +
+                $"skipping broker at '{station.name}'.\n" +
+                $"---- system prompt ----\n{systemPrompt}\n" +
+                $"---- user prompt ----\n{userPrompt}\n" +
+                $"---- raw response ----\n{rawContent}\n" +
+                $"---- end ----");
             return;
         }
         catch (Exception ex)
         {
             Plugin.Log.LogError(
-                $"[vganima] Unexpected validation failure; skipping broker at '{station.name}': {ex}");
+                $"Unexpected validation failure; skipping broker at '{station.name}': {ex}\n" +
+                $"---- system prompt ----\n{systemPrompt}\n" +
+                $"---- user prompt ----\n{userPrompt}\n" +
+                $"---- raw response ----\n{rawContent}\n" +
+                $"---- end ----");
             return;
         }
 
+        Plugin.Log.LogDebug(
+            $"Validation passed for '{station.name}'; " +
+            $"enqueueing main-thread finalize (mission={story.Mission?.Name ?? "<legacy>"})\n" +
+            $"---- system prompt ----\n{systemPrompt}\n" +
+            $"---- user prompt ----\n{userPrompt}\n" +
+            $"---- raw response ----\n{rawContent}\n" +
+            $"---- end ----");
+
         // Hop back to the main thread to touch game state + add the patron.
         plugin.Scheduler.Enqueue(() => FinalizeBrokerInjection(
-            plugin, bar, station, newPatron, storyId, candidateSeed, story));
+            plugin, bar, station, newPatron, candidateSeed, story));
     }
 
     private static void FinalizeBrokerInjection(
         Plugin plugin, Bar bar, SpaceStation station, Salesman newPatron,
-        string storyId, string candidateSeed, LlmStory story)
+        string candidateSeed, LlmStory story)
     {
         try
         {
+            Plugin.Log.LogDebug(
+                $"FinalizeBrokerInjection running on main thread for '{station.name}'");
             // Re-check: player may have left the station between LLM dispatch
             // and continuation (spec §11: "If the bar has closed (player left
             // station), checks SpaceStation.current == station and skips").
             if (SpaceStation.current != station)
             {
                 Plugin.Log.LogDebug(
-                    $"[vganima] Player left '{station.name}' before LLM returned; dropping broker");
+                    $"Player left '{station.name}' before LLM returned; dropping broker");
                 return;
             }
             if (bar.availablePatrons.Contains(newPatron))
             {
-                Plugin.Log.LogDebug("[vganima] Broker already added (race); skipping");
+                Plugin.Log.LogDebug("Broker already added (race); skipping");
                 return;
+            }
+
+            // Build + register the mission if the LLM returned a v2 mission block.
+            // Legacy fallback: if story.Mission is null (LLM returned the old
+            // dialogue-only schema), pitch the legacy TestStoryMissions mission
+            // so early-testing saves still work.
+            string storyId;
+            if (story.Mission != null)
+            {
+                try
+                {
+                    // Area-anchored reward scaling: pass the station's level so
+                    // rewards match the local zone, not the player's character
+                    // level. Mirrors vanilla MissionGenerator. See
+                    // MissionFactoryFromJson.Build XML docs for the why.
+                    var missionLevel = station.level;
+                    storyId = plugin.MissionAssigner.Assign(
+                        story.Mission, missionLevel, station, candidateSeed);
+                    Plugin.Log.LogInfo(
+                        $"LLM-authored mission '{story.Mission.Name}' registered " +
+                        $"with storyId={storyId} (missionLevel={missionLevel})");
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogError(
+                        $"MissionFactoryFromJson threw for '{story.Mission.Name}'; " +
+                        $"skipping broker at '{station.name}': {ex}");
+                    return;
+                }
+            }
+            else
+            {
+#pragma warning disable CS0618
+                storyId = TestStoryMissions.JobsiteSurveyId;
+#pragma warning restore CS0618
+                Plugin.Log.LogWarning(
+                    $"LLM returned v1 dialogue-only schema; falling back to legacy " +
+                    $"'{storyId}' for broker at '{station.name}'");
             }
 
             // Build dialogueLines from the pitch block so VGTTS's BarPatron.Initialize
@@ -365,7 +484,7 @@ internal static class BarRefreshPatches
             bar.availablePatrons.Add(newPatron);
 
             Plugin.Log.LogInfo(
-                $"[vganima] Added LLM-authored broker '{newPatron.name}' to bar at '{station.name}' " +
+                $"Added LLM-authored broker '{newPatron.name}' to bar at '{station.name}' " +
                 $"(seat {newPatron.seat}, isMale={newPatron.isMale}, storyId={storyId}, " +
                 $"{bar.availablePatrons.Count} patrons total)");
 
@@ -374,46 +493,132 @@ internal static class BarRefreshPatches
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] FinalizeBrokerInjection threw: {ex}");
+            Plugin.Log.LogError($"FinalizeBrokerInjection threw: {ex}");
         }
     }
 
     private static string BuildSystemPrompt()
     {
-        // v1 system prompt, verbatim from spec §7 (trimmed whitespace only).
+        // v2-mission system prompt per spec §8.
         return
-            "You are a writer for bar-broker NPCs in a space-trading game. Your job is to produce\n" +
-            "three short dialogue blocks for one specific broker, addressed to the player's captain.\n\n" +
-            "The player will tell you about themselves, their ship, where they are, and the broker.\n" +
-            "You ONLY output valid JSON matching this schema — no preamble, no markdown fences:\n\n" +
+            "You are a writer for bar-broker NPCs in a space-trading game. Your job is to\n" +
+            "produce ONE dialogue-and-mission JSON object the broker will offer the player.\n\n" +
+            "You ONLY output valid JSON matching this schema - no preamble, no markdown fences:\n\n" +
             "{\n" +
-            "  \"schema\": \"vganima/story/v1\",\n" +
-            "  \"pitch\":    [ /* 3 to 5 short in-character lines pitching a casual job */ ],\n" +
-            "  \"check_in\": [ /* 1 to 2 lines for when the captain returns mid-job */ ],\n" +
-            "  \"payout\":   [ /* 2 to 4 lines for when the captain turns the job in */ ]\n" +
+            "  \"schema\": \"vganima/mission/v1\",\n" +
+            "  \"pitch\":    [ /* 3..5 short in-character lines pitching the job */ ],\n" +
+            "  \"check_in\": [ /* 1..2 lines for when the captain returns mid-job */ ],\n" +
+            "  \"payout\":   [ /* 2..4 lines for when the captain turns the job in */ ],\n" +
+            "  \"mission\": {\n" +
+            "    \"name\":            /* <=60 chars */,\n" +
+            "    \"description\":     /* <=500 chars */,\n" +
+            "    \"completion_text\": /* <=200 chars */,\n" +
+            "    \"source_faction\":  /* one of: Marauders PoliceGuild BountyGuild\n" +
+            "                          TradingGuild MiningGuild IndustrialGuild SalvageGuild\n" +
+            "                          Stranded MercenaryGuild Smugglers Darkspacers Puppeteers\n" +
+            "                          Fanatics HolyRadicals Amalgam Gold Red Blue */,\n" +
+            "    \"steps\": [ /* 1..3 steps, each with 1..2 objectives */\n" +
+            "      { \"objectives\": [ /* objective objects */ ] } ],\n" +
+            "    \"rewards\": [ /* 1..5 reward objects */ ]\n" +
+            "  }\n" +
             "}\n\n" +
-            "Rules for every line:\n" +
+            "OBJECTIVE TYPES (each objective object has a `type` plus fields):\n" +
+            "  { \"type\": \"KillEnemies\",\n" +
+            "    \"enemy_faction\":   <faction from list above>,\n" +
+            "    \"required_amount\": 1..5,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "  { \"type\": \"ProtectUnit\",\n" +
+            "    \"protect_text\":    <<=120 chars> }\n" +
+            "  { \"type\": \"TriggerObjective\",\n" +
+            "    \"trigger\":         one of [DockedWithSpaceStation, ArrivedAtSpaceStation, MoveToArea],\n" +
+            "    \"required_amount\": 1..3,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "  { \"type\": \"CollectItemTypes\",\n" +
+            "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods, Junk],\n" +
+            "    \"required_amount\": 1..50,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "  { \"type\": \"ClearPoi\",\n" +
+            "    \"enemy_faction\":   <hostile faction from list above>,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "      Spawns a dedicated combat zone on the system map. Use ONLY when the\n" +
+            "      mission is genuinely 'go fight at a specific place.' When you DO pick\n" +
+            "      combat, prefer ClearPoi over KillEnemies; required_amount is auto-\n" +
+            "      computed from the spawn, so do not specify one.\n\n" +
+            "REWARD TYPES:\n" +
+            "  { \"type\": \"Credits\",    \"base_value\": 15..100 }\n" +
+            "  { \"type\": \"Experience\", \"base_value\": 30..100 }\n" +
+            "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n\n" +
+            "RULES FOR EVERY DIALOGUE LINE:\n" +
             "- ASCII only (no em-dashes, smart quotes, or emoji; hyphens and straight apostrophes OK)\n" +
             "- Maximum 120 characters\n" +
             "- Non-empty, no leading/trailing whitespace\n" +
-            "- In character for the broker; reference the player's state or the location when it fits naturally\n" +
-            "- Do NOT describe a specific mission objective yet — keep the work vague (\"a quick errand\",\n" +
-            "  \"a simple survey\"). Mission details come from the game engine, not you.\n\n" +
-            "If the player is high-level, the broker should sound respectful. If low-level, more\n" +
-            "paternal. If hostile factions overlap with the broker's faction, lean wary. Let the\n" +
-            "player's active story arcs and recent archive nudge the tone.";
+            "- In character for the broker; reference the player's state or the location when it fits\n\n" +
+            "COHERENCE RULES:\n" +
+            "- MISSION ARCHETYPE — context.mission_guidance has a pre-computed ranked weights\n" +
+            "  dict derived from the player's specialization, titles, cargo, active missions,\n" +
+            "  station facilities, ship state, and faction state. The top-ranked archetype is\n" +
+            "  the default pick. Deviate to a lower-ranked one ONLY if the context makes the\n" +
+            "  top pick a bad fit (rare). Do NOT pick an archetype listed in\n" +
+            "  mission_guidance.forbidden_archetypes — those are impossible given the context\n" +
+            "  (e.g. combat forbidden when no hostile faction exists).\n" +
+            "  The five archetypes map to these objective types:\n" +
+            "    * combat  → ClearPoi (preferred) or KillEnemies. Requires a hostile faction.\n" +
+            "    * gather  → CollectItemTypes with item_category Ore or RefinedProduct.\n" +
+            "    * salvage → CollectItemTypes with item_category Salvage or Junk.\n" +
+            "    * deliver → TriggerObjective (Docked/Arrived/MoveToArea), optionally paired\n" +
+            "                with CollectItemTypes TradeGoods for a 'haul + unload' shape.\n" +
+            "    * escort  → ProtectUnit + TriggerObjective travel to destination.\n" +
+            "  mission_guidance.rationale lists the signals that drove the weights — use it as\n" +
+            "  flavor material (if it mentions @GatlingAmmo, the pitch can reference gunnery).\n" +
+            "- Dialogue and mission must match: if the pitch promises a rescue, include ProtectUnit\n" +
+            "  or KillEnemies, not a lone CollectItemTypes.\n" +
+            "- AT MOST ONE COMBAT OBJECTIVE PER STEP. Do NOT put ClearPoi and KillEnemies into\n" +
+            "  the same step. ClearPoi auto-completes when its spawned zone is cleared; KillEnemies\n" +
+            "  counts ANY kill of that faction anywhere — mixing them creates a 'main mission done,\n" +
+            "  stragglers still pending' shape that's awkward. Pick one combat verb per step.\n" +
+            "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
+            "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
+            "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +
+            "    * In mission block fields (source_faction, enemy_faction, reward faction),\n" +
+            "      ALWAYS use the identifier (the JSON key).\n" +
+            "  Example: dialogue says \"the Corsair Syndicate is harassing us\" but the mission\n" +
+            "  block sets enemy_faction=\"Marauders\".\n" +
+            "- source_faction is the hiring broker's faction. Only pick an identifier whose\n" +
+            "  relation in context.factions is \"friendly\" — disliked or hostile gilds would\n" +
+            "  not hire the player.\n" +
+            "- For KillEnemies, enemy_faction MUST be an identifier whose relation is \"hostile\".\n" +
+            "  Do NOT target friendly or neutral factions, even if narratively fitting. If no\n" +
+            "  faction has relation=\"hostile\", omit KillEnemies entirely and use other\n" +
+            "  objective types.\n" +
+            "- At least one objective across all steps must NOT be ProtectUnit (a mission of pure\n" +
+            "  protect is degenerate).\n" +
+            "- Reward base_values MUST stay within context.reward_clamps. The schema block above\n" +
+            "  lists the same ranges; the context repeats them so you cannot miss them.\n" +
+            "- TYPICAL REWARD MAGNITUDES (match vanilla's mission-board feel — the formula\n" +
+            "  scales base_values by missionLevel internally, so do NOT inflate bases for\n" +
+            "  higher-level stations):\n" +
+            "    * Deliver / fetch / courier only:      credits 20-30, xp 40-55.\n" +
+            "    * Mine / salvage / collect:            credits 25-40, xp 45-60.\n" +
+            "    * Kill / escort / protect / clear:     credits 35-50, xp 55-75.\n" +
+            "    * Hazardous multi-objective mission:   credits 60-100, xp 75-100.\n" +
+            "    * Reputation amount: 200-350 standard; up to 500 for faction-defining favors.\n" +
+            "      Even simple gather / deliver jobs pay 200-300 — DO NOT emit positive amounts\n" +
+            "      below 150. Vanilla's procedural floor is 200; going lower feels like an insult.\n" +
+            "  STEP COUNT IS NARRATIVE STRUCTURE, NOT A REWARD MULTIPLIER. Vanilla's\n" +
+            "  single-step and multi-step missions pay the same when the objective\n" +
+            "  archetype matches — pick base_value by archetype, not by step count.\n\n" +
+            "Reply with ONLY the JSON object.";
     }
 
     private static string BuildUserPrompt(string contextJson, BrokerInfo brokerInfo, SpaceStation station)
     {
-        // User prompt per spec §7.
         var gender = brokerInfo.IsMale ? "male" : "female";
         return
             "Player and world context:\n" +
             contextJson + "\n\n" +
             $"Broker to voice: {brokerInfo.Name}, {gender}, at {station.name}, " +
             $"aligned with {brokerInfo.StationFaction}.\n\n" +
-            "Produce one JSON object matching the vganima/story/v1 schema.";
+            "Produce one JSON object matching the vganima/mission/v1 schema.";
     }
 
     /// <summary>A broker is "active" if its storyId is an active story mission
@@ -442,12 +647,12 @@ internal static class BarUIDebugPatches
         try
         {
             var station = SpaceStation.current;
-            if (station?.bar == null) { Plugin.Log.LogInfo("[vganima] BarUI.RefreshPatrons ran with no current station"); return; }
+            if (station?.bar == null) { Plugin.Log.LogInfo("BarUI.RefreshPatrons ran with no current station"); return; }
             var roster = string.Join(", ", station.bar.availablePatrons
                 .Select((p, i) => $"[{i}] {p.name}/seat{p.seat}/M={p.isMale}"));
-            Plugin.Log.LogInfo($"[vganima] BarUI.RefreshPatrons finished — list: {roster}");
+            Plugin.Log.LogInfo($"BarUI.RefreshPatrons finished — list: {roster}");
         }
-        catch (Exception ex) { Plugin.Log.LogError($"[vganima] RefreshPatrons_Postfix threw: {ex}"); }
+        catch (Exception ex) { Plugin.Log.LogError($"RefreshPatrons_Postfix threw: {ex}"); }
     }
 }
 
@@ -461,9 +666,9 @@ internal static class BarPatronImageDebugPatches
         try
         {
             Plugin.Log.LogInfo(
-                $"[vganima] BarUI instantiated prefab for: {patron?.name}/seat{patron?.seat}/M={patron?.isMale}");
+                $"BarUI instantiated prefab for: {patron?.name}/seat{patron?.seat}/M={patron?.isMale}");
         }
-        catch (Exception ex) { Plugin.Log.LogError($"[vganima] SetPatronData_Postfix threw: {ex}"); }
+        catch (Exception ex) { Plugin.Log.LogError($"SetPatronData_Postfix threw: {ex}"); }
     }
 
     [HarmonyPostfix]
@@ -474,9 +679,9 @@ internal static class BarPatronImageDebugPatches
         {
             var patron = Traverse.Create(__instance).Field<BarPatron>("patron").Value;
             Plugin.Log.LogInfo(
-                $"[vganima] SetPatronSprite invoked for: {patron?.name}/seat{patron?.seat}/M={patron?.isMale}");
+                $"SetPatronSprite invoked for: {patron?.name}/seat{patron?.seat}/M={patron?.isMale}");
         }
-        catch (Exception ex) { Plugin.Log.LogError($"[vganima] SetPatronSprite_Postfix threw: {ex}"); }
+        catch (Exception ex) { Plugin.Log.LogError($"SetPatronSprite_Postfix threw: {ex}"); }
     }
 }
 
@@ -523,12 +728,17 @@ internal static class RegistryRehydratePatches
                 if (!seed.StartsWith(BarRefreshPatches.BrokerSeedPrefix)) continue;
                 if (plugin.Registry.TryGet(patron, out _)) continue;
 
-                var storyId = plugin.Assigner.Assign(seed, alreadyAssigned, plugin.PlayerView);
-                if (storyId == null)
+                // Rehydrated brokers from legacy saves offered a fixed storyId.
+                // v2-mission doesn't persist the LLM-authored storyId across sessions
+                // (spec §7 known limitation) so we fall back to the legacy factory.
+#pragma warning disable CS0618
+                var storyId = TestStoryMissions.JobsiteSurveyId;
+#pragma warning restore CS0618
+                if (plugin.PlayerView.IsArchived(storyId))
                 {
                     Plugin.Log.LogWarning(
-                        $"[vganima] Rehydrate: assigner returned null for seed={seed} — " +
-                        $"leaving broker unregistered (will fall through to vanilla)");
+                        $"Rehydrate: legacy storyId {storyId} is archived; " +
+                        $"leaving broker '{patron.name}' unregistered");
                     continue;
                 }
 
@@ -539,7 +749,7 @@ internal static class RegistryRehydratePatches
                 if (plugin.LlmClient == null)
                 {
                     Plugin.Log.LogDebug(
-                        $"[vganima] Rehydrate: LLM disabled, leaving broker '{patron.name}' unregistered");
+                        $"Rehydrate: LLM disabled, leaving broker '{patron.name}' unregistered");
                     continue;
                 }
 
@@ -559,7 +769,7 @@ internal static class RegistryRehydratePatches
                 catch (Exception ex)
                 {
                     Plugin.Log.LogError(
-                        $"[vganima] Rehydrate ContextGatherer threw for '{salesman.name}': {ex}");
+                        $"Rehydrate ContextGatherer threw for '{salesman.name}': {ex}");
                     continue;
                 }
 
@@ -568,7 +778,7 @@ internal static class RegistryRehydratePatches
                 var userPrompt = BuildRehydrateUserPrompt(contextJson, brokerInfo, station);
 
                 Plugin.Log.LogInfo(
-                    $"[vganima] Rehydrate: dispatching LLM for '{salesman.name}' " +
+                    $"Rehydrate: dispatching LLM for '{salesman.name}' " +
                     $"at '{station.name}' (seed={seed}, storyId={storyId})");
 
                 _ = RehydrateDispatchAsync(plugin, bar, station, salesman, storyId,
@@ -577,7 +787,7 @@ internal static class RegistryRehydratePatches
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] RefreshPatrons_Prefix (rehydrate) threw: {ex}");
+            Plugin.Log.LogError($"RefreshPatrons_Prefix (rehydrate) threw: {ex}");
         }
     }
 
@@ -595,20 +805,20 @@ internal static class RegistryRehydratePatches
         catch (TaskCanceledException)
         {
             Plugin.Log.LogWarning(
-                $"[vganima] Rehydrate LLM timeout; leaving broker '{patron.name}' unregistered");
+                $"Rehydrate LLM timeout; leaving broker '{patron.name}' unregistered");
             return;
         }
         catch (System.Net.Http.HttpRequestException ex)
         {
             Plugin.Log.LogWarning(
-                $"[vganima] Rehydrate LLM request failed: {ex.Message}; " +
+                $"Rehydrate LLM request failed: {ex.Message}; " +
                 $"leaving broker '{patron.name}' unregistered");
             return;
         }
         catch (Exception ex)
         {
             Plugin.Log.LogError(
-                $"[vganima] Rehydrate LLM call threw for '{patron.name}': {ex}");
+                $"Rehydrate LLM call threw for '{patron.name}': {ex}");
             return;
         }
 
@@ -619,16 +829,23 @@ internal static class RegistryRehydratePatches
         }
         catch (LlmValidationException ex)
         {
-            var preview = rawContent.Length > 500 ? rawContent.Substring(0, 500) : rawContent;
             Plugin.Log.LogInfo(
-                $"[vganima] Rehydrate LLM response failed validation: {ex.Message}; " +
-                $"leaving broker '{patron.name}' unregistered. First 500 chars: {preview}");
+                $"Rehydrate LLM response failed validation: {ex.Message}; " +
+                $"leaving broker '{patron.name}' unregistered.\n" +
+                $"---- system prompt ----\n{systemPrompt}\n" +
+                $"---- user prompt ----\n{userPrompt}\n" +
+                $"---- raw response ----\n{rawContent}\n" +
+                $"---- end ----");
             return;
         }
         catch (Exception ex)
         {
             Plugin.Log.LogError(
-                $"[vganima] Rehydrate unexpected validation failure for '{patron.name}': {ex}");
+                $"Rehydrate unexpected validation failure for '{patron.name}': {ex}\n" +
+                $"---- system prompt ----\n{systemPrompt}\n" +
+                $"---- user prompt ----\n{userPrompt}\n" +
+                $"---- raw response ----\n{rawContent}\n" +
+                $"---- end ----");
             return;
         }
 
@@ -646,13 +863,13 @@ internal static class RegistryRehydratePatches
             if (!bar.availablePatrons.Contains(patron))
             {
                 Plugin.Log.LogDebug(
-                    $"[vganima] Rehydrate: patron '{patron.name}' no longer in bar; dropping");
+                    $"Rehydrate: patron '{patron.name}' no longer in bar; dropping");
                 return;
             }
             if (plugin.Registry.TryGet(patron, out _))
             {
                 Plugin.Log.LogDebug(
-                    $"[vganima] Rehydrate: patron '{patron.name}' already registered (race); dropping");
+                    $"Rehydrate: patron '{patron.name}' already registered (race); dropping");
                 return;
             }
 
@@ -674,42 +891,129 @@ internal static class RegistryRehydratePatches
             plugin.Registry.Register(patron, new ConversionRecord(warmedPairs, station, storyId, story));
 
             Plugin.Log.LogInfo(
-                $"[vganima] Rehydrated LLM-authored broker '{patron.name}' at '{station.name}' " +
+                $"Rehydrated LLM-authored broker '{patron.name}' at '{station.name}' " +
                 $"(storyId={storyId})");
         }
         catch (Exception ex)
         {
-            Plugin.Log.LogError($"[vganima] FinalizeRehydrate threw: {ex}");
+            Plugin.Log.LogError($"FinalizeRehydrate threw: {ex}");
         }
     }
 
     private static string BuildRehydrateSystemPrompt()
     {
-        // Identical to BarRefreshPatches.BuildSystemPrompt — duplicated
-        // rather than reached via InternalsVisibleTo so the two classes stay
+        // v2-mission system prompt per spec §8. Duplicated verbatim from
+        // BarRefreshPatches.BuildSystemPrompt so the two classes stay
         // independently modifiable. If the prompt grows, extract to a shared
         // module.
         return
-            "You are a writer for bar-broker NPCs in a space-trading game. Your job is to produce\n" +
-            "three short dialogue blocks for one specific broker, addressed to the player's captain.\n\n" +
-            "The player will tell you about themselves, their ship, where they are, and the broker.\n" +
-            "You ONLY output valid JSON matching this schema — no preamble, no markdown fences:\n\n" +
+            "You are a writer for bar-broker NPCs in a space-trading game. Your job is to\n" +
+            "produce ONE dialogue-and-mission JSON object the broker will offer the player.\n\n" +
+            "You ONLY output valid JSON matching this schema - no preamble, no markdown fences:\n\n" +
             "{\n" +
-            "  \"schema\": \"vganima/story/v1\",\n" +
-            "  \"pitch\":    [ /* 3 to 5 short in-character lines pitching a casual job */ ],\n" +
-            "  \"check_in\": [ /* 1 to 2 lines for when the captain returns mid-job */ ],\n" +
-            "  \"payout\":   [ /* 2 to 4 lines for when the captain turns the job in */ ]\n" +
+            "  \"schema\": \"vganima/mission/v1\",\n" +
+            "  \"pitch\":    [ /* 3..5 short in-character lines pitching the job */ ],\n" +
+            "  \"check_in\": [ /* 1..2 lines for when the captain returns mid-job */ ],\n" +
+            "  \"payout\":   [ /* 2..4 lines for when the captain turns the job in */ ],\n" +
+            "  \"mission\": {\n" +
+            "    \"name\":            /* <=60 chars */,\n" +
+            "    \"description\":     /* <=500 chars */,\n" +
+            "    \"completion_text\": /* <=200 chars */,\n" +
+            "    \"source_faction\":  /* one of: Marauders PoliceGuild BountyGuild\n" +
+            "                          TradingGuild MiningGuild IndustrialGuild SalvageGuild\n" +
+            "                          Stranded MercenaryGuild Smugglers Darkspacers Puppeteers\n" +
+            "                          Fanatics HolyRadicals Amalgam Gold Red Blue */,\n" +
+            "    \"steps\": [ /* 1..3 steps, each with 1..2 objectives */\n" +
+            "      { \"objectives\": [ /* objective objects */ ] } ],\n" +
+            "    \"rewards\": [ /* 1..5 reward objects */ ]\n" +
+            "  }\n" +
             "}\n\n" +
-            "Rules for every line:\n" +
+            "OBJECTIVE TYPES (each objective object has a `type` plus fields):\n" +
+            "  { \"type\": \"KillEnemies\",\n" +
+            "    \"enemy_faction\":   <faction from list above>,\n" +
+            "    \"required_amount\": 1..5,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "  { \"type\": \"ProtectUnit\",\n" +
+            "    \"protect_text\":    <<=120 chars> }\n" +
+            "  { \"type\": \"TriggerObjective\",\n" +
+            "    \"trigger\":         one of [DockedWithSpaceStation, ArrivedAtSpaceStation, MoveToArea],\n" +
+            "    \"required_amount\": 1..3,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "  { \"type\": \"CollectItemTypes\",\n" +
+            "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods, Junk],\n" +
+            "    \"required_amount\": 1..50,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "  { \"type\": \"ClearPoi\",\n" +
+            "    \"enemy_faction\":   <hostile faction from list above>,\n" +
+            "    \"description\":     <<=120 chars> }\n" +
+            "      Spawns a dedicated combat zone on the system map. Use ONLY when the\n" +
+            "      mission is genuinely 'go fight at a specific place.' When you DO pick\n" +
+            "      combat, prefer ClearPoi over KillEnemies; required_amount is auto-\n" +
+            "      computed from the spawn, so do not specify one.\n\n" +
+            "REWARD TYPES:\n" +
+            "  { \"type\": \"Credits\",    \"base_value\": 15..100 }\n" +
+            "  { \"type\": \"Experience\", \"base_value\": 30..100 }\n" +
+            "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n\n" +
+            "RULES FOR EVERY DIALOGUE LINE:\n" +
             "- ASCII only (no em-dashes, smart quotes, or emoji; hyphens and straight apostrophes OK)\n" +
             "- Maximum 120 characters\n" +
             "- Non-empty, no leading/trailing whitespace\n" +
-            "- In character for the broker; reference the player's state or the location when it fits naturally\n" +
-            "- Do NOT describe a specific mission objective yet — keep the work vague (\"a quick errand\",\n" +
-            "  \"a simple survey\"). Mission details come from the game engine, not you.\n\n" +
-            "If the player is high-level, the broker should sound respectful. If low-level, more\n" +
-            "paternal. If hostile factions overlap with the broker's faction, lean wary. Let the\n" +
-            "player's active story arcs and recent archive nudge the tone.";
+            "- In character for the broker; reference the player's state or the location when it fits\n\n" +
+            "COHERENCE RULES:\n" +
+            "- MISSION ARCHETYPE — context.mission_guidance has a pre-computed ranked weights\n" +
+            "  dict derived from the player's specialization, titles, cargo, active missions,\n" +
+            "  station facilities, ship state, and faction state. The top-ranked archetype is\n" +
+            "  the default pick. Deviate to a lower-ranked one ONLY if the context makes the\n" +
+            "  top pick a bad fit (rare). Do NOT pick an archetype listed in\n" +
+            "  mission_guidance.forbidden_archetypes — those are impossible given the context\n" +
+            "  (e.g. combat forbidden when no hostile faction exists).\n" +
+            "  The five archetypes map to these objective types:\n" +
+            "    * combat  → ClearPoi (preferred) or KillEnemies. Requires a hostile faction.\n" +
+            "    * gather  → CollectItemTypes with item_category Ore or RefinedProduct.\n" +
+            "    * salvage → CollectItemTypes with item_category Salvage or Junk.\n" +
+            "    * deliver → TriggerObjective (Docked/Arrived/MoveToArea), optionally paired\n" +
+            "                with CollectItemTypes TradeGoods for a 'haul + unload' shape.\n" +
+            "    * escort  → ProtectUnit + TriggerObjective travel to destination.\n" +
+            "  mission_guidance.rationale lists the signals that drove the weights — use it as\n" +
+            "  flavor material (if it mentions @GatlingAmmo, the pitch can reference gunnery).\n" +
+            "- Dialogue and mission must match: if the pitch promises a rescue, include ProtectUnit\n" +
+            "  or KillEnemies, not a lone CollectItemTypes.\n" +
+            "- AT MOST ONE COMBAT OBJECTIVE PER STEP. Do NOT put ClearPoi and KillEnemies into\n" +
+            "  the same step. ClearPoi auto-completes when its spawned zone is cleared; KillEnemies\n" +
+            "  counts ANY kill of that faction anywhere — mixing them creates a 'main mission done,\n" +
+            "  stragglers still pending' shape that's awkward. Pick one combat verb per step.\n" +
+            "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
+            "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
+            "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +
+            "    * In mission block fields (source_faction, enemy_faction, reward faction),\n" +
+            "      ALWAYS use the identifier (the JSON key).\n" +
+            "  Example: dialogue says \"the Corsair Syndicate is harassing us\" but the mission\n" +
+            "  block sets enemy_faction=\"Marauders\".\n" +
+            "- source_faction is the hiring broker's faction. Only pick an identifier whose\n" +
+            "  relation in context.factions is \"friendly\" — disliked or hostile gilds would\n" +
+            "  not hire the player.\n" +
+            "- For KillEnemies, enemy_faction MUST be an identifier whose relation is \"hostile\".\n" +
+            "  Do NOT target friendly or neutral factions, even if narratively fitting. If no\n" +
+            "  faction has relation=\"hostile\", omit KillEnemies entirely and use other\n" +
+            "  objective types.\n" +
+            "- At least one objective across all steps must NOT be ProtectUnit (a mission of pure\n" +
+            "  protect is degenerate).\n" +
+            "- Reward base_values MUST stay within context.reward_clamps. The schema block above\n" +
+            "  lists the same ranges; the context repeats them so you cannot miss them.\n" +
+            "- TYPICAL REWARD MAGNITUDES (match vanilla's mission-board feel — the formula\n" +
+            "  scales base_values by missionLevel internally, so do NOT inflate bases for\n" +
+            "  higher-level stations):\n" +
+            "    * Deliver / fetch / courier only:      credits 20-30, xp 40-55.\n" +
+            "    * Mine / salvage / collect:            credits 25-40, xp 45-60.\n" +
+            "    * Kill / escort / protect / clear:     credits 35-50, xp 55-75.\n" +
+            "    * Hazardous multi-objective mission:   credits 60-100, xp 75-100.\n" +
+            "    * Reputation amount: 200-350 standard; up to 500 for faction-defining favors.\n" +
+            "      Even simple gather / deliver jobs pay 200-300 — DO NOT emit positive amounts\n" +
+            "      below 150. Vanilla's procedural floor is 200; going lower feels like an insult.\n" +
+            "  STEP COUNT IS NARRATIVE STRUCTURE, NOT A REWARD MULTIPLIER. Vanilla's\n" +
+            "  single-step and multi-step missions pay the same when the objective\n" +
+            "  archetype matches — pick base_value by archetype, not by step count.\n\n" +
+            "Reply with ONLY the JSON object.";
     }
 
     private static string BuildRehydrateUserPrompt(string contextJson, BrokerInfo brokerInfo, SpaceStation station)
@@ -720,6 +1024,6 @@ internal static class RegistryRehydratePatches
             contextJson + "\n\n" +
             $"Broker to voice: {brokerInfo.Name}, {gender}, at {station.name}, " +
             $"aligned with {brokerInfo.StationFaction}.\n\n" +
-            "Produce one JSON object matching the vganima/story/v1 schema.";
+            "Produce one JSON object matching the vganima/mission/v1 schema.";
     }
 }
