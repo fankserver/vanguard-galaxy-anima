@@ -251,14 +251,32 @@ internal sealed class LlmBarEcosystemSection
 }
 
 /// <summary>Counts of each canonical purchase type the player has made
-/// from bar salesmen across their whole playthrough. Lifetime figures;
-/// zeroes are not emitted (builder returns null in that case).</summary>
+/// across their whole playthrough. Lifetime figures; fully zeroed out
+/// profiles are not emitted (builder returns null — saves context tokens).
+///
+/// <para>Two distinct sources:
+/// <list type="bullet">
+///   <item><b>Bar salesmen</b> (claims / png / equipment pieces) — high-
+///     signal narrative investment ("bought a salvage claim" = intent to
+///     work that claim).</item>
+///   <item><b>Station commodity shops</b> (mining / salvage / general /
+///     other) — lower-signal participation in that shop's trade loop
+///     ("shops at Salvage Shop often" = active in salvage trading).</item>
+/// </list>
+/// Keeping the two groups separate lets the LLM weight them differently.</para></summary>
 internal sealed class LlmPurchaseProfileSection
 {
+    // Bar salesmen — written by BarPurchasePatches.
     [JsonProperty("mining_claims_bought")]  public int MiningClaimsBought  { get; set; }
     [JsonProperty("salvage_claims_bought")] public int SalvageClaimsBought { get; set; }
     [JsonProperty("space_ship_png_bought")] public int SpaceShipPngBought  { get; set; }
     [JsonProperty("equipment_bought")]      public int EquipmentBought     { get; set; }
+
+    // Station commodity shops — written by ShopPurchasePatches.
+    [JsonProperty("mining_shop_buys")]   public int MiningShopBuys   { get; set; }
+    [JsonProperty("salvage_shop_buys")]  public int SalvageShopBuys  { get; set; }
+    [JsonProperty("general_shop_buys")]  public int GeneralShopBuys  { get; set; }
+    [JsonProperty("other_shop_buys")]    public int OtherShopBuys    { get; set; }
 }
 
 internal sealed record LlmBarSalesmanEntry(

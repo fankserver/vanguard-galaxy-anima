@@ -841,22 +841,30 @@ internal static class BarRefreshPatches
             "  multi-phase narrative into one step just because it validates — the pitch will\n" +
             "  promise more than the mission delivers.\n" +
             "- PURCHASE PROFILE — context.purchase_profile (if present) tallies lifetime\n" +
-            "  buys the player has made from bar salesmen. Non-zero categories are a\n" +
-            "  revealed-preference signal: the player spends credits on these things.\n" +
-            "  Use the numbers to tune how you PITCH your mission and what you OFFER:\n" +
-            "    * High mining_claims_bought → this player likes mining. Hint that the\n" +
-            "      job lets them work a claim they can't buy, or cite the claim dealer's\n" +
-            "      prices as context (\"you've been hitting up the Prospectors — I've\n" +
-            "      got something cheaper\").\n" +
-            "    * High salvage_claims_bought → same for salvage.\n" +
-            "    * High equipment_bought → player is gear-focused; reference loadout,\n" +
-            "      turret upgrades, weapon-class talk.\n" +
-            "    * space_ship_png_bought > 0 → player fell for the PNG scam. Joke\n" +
-            "      potential, broker can tease gently.\n" +
-            "  Do NOT add new reward types just because the profile is populated — the\n" +
-            "  current reward set is still Credits / Experience / Reputation. The profile\n" +
-            "  shapes DIALOGUE and REWARD MAGNITUDE choices, not reward type (item-type\n" +
-            "  rewards land in a later schema version).\n" +
+            "  credits-spending across two distinct channels:\n" +
+            "    Bar salesmen (narrative investment — high signal):\n" +
+            "      * High mining_claims_bought → player likes mining. Hint that the\n" +
+            "        job lets them work a claim they can't buy, or cite the claim\n" +
+            "        dealer's prices as context (\"you've been hitting up the\n" +
+            "        Prospectors — I've got something cheaper\").\n" +
+            "      * High salvage_claims_bought → same for salvage.\n" +
+            "      * High equipment_bought → player is gear-focused; reference loadout,\n" +
+            "        turret upgrades, weapon-class talk.\n" +
+            "      * space_ship_png_bought > 0 → player fell for the PNG scam. Joke\n" +
+            "        potential, broker can tease gently.\n" +
+            "    Station commodity shops (trade-loop participation — lower signal):\n" +
+            "      * High mining_shop_buys → player frequents Mining Shops; references\n" +
+            "        to ore-market prices or refinery output land well.\n" +
+            "      * High salvage_shop_buys → same for salvage economy.\n" +
+            "      * High general_shop_buys → player restocks often; the broker can\n" +
+            "        reference supply runs or daily needs.\n" +
+            "      * other_shop_buys covers Bounty / Patrol / Industry / Conquest shops —\n" +
+            "        a weak signal of faction-career engagement.\n" +
+            "  Bar and shop signals are independent: a high equipment_bought plus a\n" +
+            "  high general_shop_buys means the player is gear-focused AND restocks a\n" +
+            "  lot; either alone is a thinner signal. The profile shapes DIALOGUE and\n" +
+            "  REWARD MAGNITUDE choices (within the existing type set), not which\n" +
+            "  reward types exist.\n" +
             "- BAR ECOSYSTEM — context.bar_ecosystem.other_salesmen_here (if present) lists\n" +
             "  vanilla salesmen at THIS same bar right now. The broker can SEE them from\n" +
             "  across the room. Kinds:\n" +
@@ -1455,22 +1463,30 @@ internal static class RegistryRehydratePatches
             "  multi-phase narrative into one step just because it validates — the pitch will\n" +
             "  promise more than the mission delivers.\n" +
             "- PURCHASE PROFILE — context.purchase_profile (if present) tallies lifetime\n" +
-            "  buys the player has made from bar salesmen. Non-zero categories are a\n" +
-            "  revealed-preference signal: the player spends credits on these things.\n" +
-            "  Use the numbers to tune how you PITCH your mission and what you OFFER:\n" +
-            "    * High mining_claims_bought → this player likes mining. Hint that the\n" +
-            "      job lets them work a claim they can't buy, or cite the claim dealer's\n" +
-            "      prices as context (\"you've been hitting up the Prospectors — I've\n" +
-            "      got something cheaper\").\n" +
-            "    * High salvage_claims_bought → same for salvage.\n" +
-            "    * High equipment_bought → player is gear-focused; reference loadout,\n" +
-            "      turret upgrades, weapon-class talk.\n" +
-            "    * space_ship_png_bought > 0 → player fell for the PNG scam. Joke\n" +
-            "      potential, broker can tease gently.\n" +
-            "  Do NOT add new reward types just because the profile is populated — the\n" +
-            "  current reward set is still Credits / Experience / Reputation. The profile\n" +
-            "  shapes DIALOGUE and REWARD MAGNITUDE choices, not reward type (item-type\n" +
-            "  rewards land in a later schema version).\n" +
+            "  credits-spending across two distinct channels:\n" +
+            "    Bar salesmen (narrative investment — high signal):\n" +
+            "      * High mining_claims_bought → player likes mining. Hint that the\n" +
+            "        job lets them work a claim they can't buy, or cite the claim\n" +
+            "        dealer's prices as context (\"you've been hitting up the\n" +
+            "        Prospectors — I've got something cheaper\").\n" +
+            "      * High salvage_claims_bought → same for salvage.\n" +
+            "      * High equipment_bought → player is gear-focused; reference loadout,\n" +
+            "        turret upgrades, weapon-class talk.\n" +
+            "      * space_ship_png_bought > 0 → player fell for the PNG scam. Joke\n" +
+            "        potential, broker can tease gently.\n" +
+            "    Station commodity shops (trade-loop participation — lower signal):\n" +
+            "      * High mining_shop_buys → player frequents Mining Shops; references\n" +
+            "        to ore-market prices or refinery output land well.\n" +
+            "      * High salvage_shop_buys → same for salvage economy.\n" +
+            "      * High general_shop_buys → player restocks often; the broker can\n" +
+            "        reference supply runs or daily needs.\n" +
+            "      * other_shop_buys covers Bounty / Patrol / Industry / Conquest shops —\n" +
+            "        a weak signal of faction-career engagement.\n" +
+            "  Bar and shop signals are independent: a high equipment_bought plus a\n" +
+            "  high general_shop_buys means the player is gear-focused AND restocks a\n" +
+            "  lot; either alone is a thinner signal. The profile shapes DIALOGUE and\n" +
+            "  REWARD MAGNITUDE choices (within the existing type set), not which\n" +
+            "  reward types exist.\n" +
             "- BAR ECOSYSTEM — context.bar_ecosystem.other_salesmen_here (if present) lists\n" +
             "  vanilla salesmen at THIS same bar right now. The broker can SEE them from\n" +
             "  across the room. Kinds:\n" +
