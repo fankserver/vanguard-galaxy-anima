@@ -76,7 +76,8 @@ internal sealed class MissionBlockValidator
     public LlmMissionBlock Parse(
         JToken mission,
         IReadOnlyList<string> atWar,
-        IReadOnlyDictionary<string, int> reputation)
+        IReadOnlyDictionary<string, int> reputation,
+        IReadOnlyList<string>? forbiddenArchetypes = null)
     {
         // Rule 1.
         if (mission == null || mission.Type != JTokenType.Object)
@@ -108,8 +109,18 @@ internal sealed class MissionBlockValidator
             throw new LlmValidationException(
                 $"field `mission.source_faction` must be a whitelisted faction, got \"{sourceFaction}\"");
 
+        // Pre-compute forbidden flags once so every objective parser can
+        // check O(1) instead of re-scanning the list. These are the only
+        // archetype-level rules that have a mechanical validator backstop;
+        // other forbidden archetypes (gather/salvage/deliver) stay as soft
+        // prompt guidance since they're usually context hints, not hard
+        // constraints.
+        var forbidden       = forbiddenArchetypes ?? System.Array.Empty<string>();
+        var combatForbidden = forbidden.Contains("combat");
+        var escortForbidden = forbidden.Contains("escort");
+
         // Rule 5: steps array, 1..3.
-        var steps = ReadSteps(obj, atWar, reputation);
+        var steps = ReadSteps(obj, atWar, reputation, combatForbidden, escortForbidden);
 
         // Rule 8: rewards array, 1..5.
         var rewards = ReadRewards(obj);
@@ -155,7 +166,9 @@ internal sealed class MissionBlockValidator
     private IReadOnlyList<LlmMissionStep> ReadSteps(
         JObject obj,
         IReadOnlyList<string> atWar,
-        IReadOnlyDictionary<string, int> reputation)
+        IReadOnlyDictionary<string, int> reputation,
+        bool combatForbidden = false,
+        bool escortForbidden = false)
     {
         var stepsTok = obj["steps"]!;
         if (stepsTok.Type != JTokenType.Array)
@@ -192,7 +205,9 @@ internal sealed class MissionBlockValidator
 
             var objectives = new List<LlmObjective>(objsArr.Count);
             for (var j = 0; j < objsArr.Count; j++)
-                objectives.Add(ParseObjective(objsArr[j], i, j, atWar, reputation));
+                objectives.Add(ParseObjective(
+                    objsArr[j], i, j, atWar, reputation,
+                    combatForbidden, escortForbidden));
 
             // Within a step, at most one combat objective. ClearPoi and
             // KillEnemies use parallel tracking (POI-bound vs faction-wide),
@@ -238,7 +253,9 @@ internal sealed class MissionBlockValidator
     private LlmObjective ParseObjective(
         JToken tok, int stepIdx, int objIdx,
         IReadOnlyList<string> atWar,
-        IReadOnlyDictionary<string, int> reputation)
+        IReadOnlyDictionary<string, int> reputation,
+        bool combatForbidden = false,
+        bool escortForbidden = false)
     {
         var path = $"mission.steps[{stepIdx}].objectives[{objIdx}]";
         if (tok.Type != JTokenType.Object)
@@ -253,7 +270,22 @@ internal sealed class MissionBlockValidator
             throw new LlmValidationException(
                 $"field `{path}.type` must be a whitelisted objective type, got \"{type}\"");
 
-        return type switch
+        // Hard enforcement of mission_guidance.forbidden_archetypes.
+        // The prompt asks the LLM to avoid these archetypes; the validator
+        // rejects if it slipped through. Saves us from prompt-attention
+        // drift on critical constraints (e.g. scenario C's pure-mining-
+        // friendly context where combat is forbidden but Marauders are
+        // listed as hostile in the factions dict).
+        if (combatForbidden && (type == "ClearPoi" || type == "KillEnemies"))
+            throw new LlmValidationException(
+                $"field `{path}.type` is a combat archetype but `combat` is in " +
+                $"mission_guidance.forbidden_archetypes");
+        if (escortForbidden && type == "ProtectUnit")
+            throw new LlmValidationException(
+                $"field `{path}.type` is ProtectUnit but `escort` is in " +
+                $"mission_guidance.forbidden_archetypes");
+
+        var parsed = type switch
         {
             "KillEnemies"      => ParseKillEnemies(obj, path, atWar, reputation),
             "ProtectUnit"      => ParseProtectUnit(obj, path),
@@ -263,6 +295,18 @@ internal sealed class MissionBlockValidator
             _                  => throw new LlmValidationException(
                                       $"unreachable: whitelist passed but switch missed \"{type}\""),
         };
+
+        // Follow-up: the CollectItemTypes.guards_faction path IS combat
+        // (spawns hostile units at the POI). Gate it here after the
+        // sub-parser returns so the error surfaces with the final typed
+        // object's detail.
+        if (combatForbidden && parsed is LlmCollectItemTypes c && c.GuardsFaction != null)
+            throw new LlmValidationException(
+                $"field `{path}.guards_faction` is set but `combat` is in " +
+                $"mission_guidance.forbidden_archetypes (guards spawn hostile units, " +
+                $"which is combat)");
+
+        return parsed;
     }
 
     private LlmObjective ParseKillEnemies(

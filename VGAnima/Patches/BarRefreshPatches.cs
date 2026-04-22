@@ -429,13 +429,15 @@ internal static class BarRefreshPatches
             $"(seed={candidateSeed}, timeout={plugin.Cfg.LlmTimeoutSeconds.Value}s)");
 
         _ = DispatchAsync(plugin, bar, station, newPatron, candidateSeed,
-            systemPrompt, userPrompt);
+            systemPrompt, userPrompt,
+            forbiddenArchetypes: context.MissionGuidance?.ForbiddenArchetypes);
     }
 
     private static async Task DispatchAsync(
         Plugin plugin, Bar bar, SpaceStation station, Salesman newPatron,
         string candidateSeed,
-        string systemPrompt, string userPrompt)
+        string systemPrompt, string userPrompt,
+        IReadOnlyList<string>? forbiddenArchetypes = null)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         string rawContent;
@@ -498,7 +500,8 @@ internal static class BarRefreshPatches
                     $"proceeding without enemy_faction cross-check");
             }
 
-            story = plugin.Validator.Parse(rawContent, atWar, reputation);
+            story = plugin.Validator.Parse(
+                rawContent, atWar, reputation, forbiddenArchetypes);
         }
         catch (LlmValidationException ex)
         {
@@ -834,6 +837,20 @@ internal static class BarRefreshPatches
             "       something different then.\"\n" +
             "    * \"The Steel Vultures remember your work on the derelict last week.\"\n" +
             "  Keep references tonally consistent with the broker's faction + station.\n" +
+            "- ATMOSPHERIC MIRRORING: context.location.station_condition is a single-word\n" +
+            "  vibe tag for the station. Shift the broker's linguistic register to match:\n" +
+            "    * war-torn  → clipped, urgent, military cadence. Short sentences. Less\n" +
+            "                  small talk; more \"we need this done yesterday.\"\n" +
+            "    * peaceful  → relaxed, collegial. Reference safety, good weather,\n" +
+            "                  quiet lanes. Nothing threatening in the subtext.\n" +
+            "    * bustling  → busy, practical, slightly impersonal. The broker has\n" +
+            "                  three other deals going; keep it efficient.\n" +
+            "    * frontier  → laconic, self-reliant, rough edges. Few facilities,\n" +
+            "                  people know each other. Broker might reference knowing\n" +
+            "                  the local crews or recent arrivals.\n" +
+            "    * normal    → no special register; neutral.\n" +
+            "  The tag is a SOFT signal — don't caricature it, let it nudge word choice\n" +
+            "  and sentence length. Dialogue content still comes from mission_guidance.\n" +
             "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
             "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
             "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +
@@ -1388,6 +1405,20 @@ internal static class RegistryRehydratePatches
             "       something different then.\"\n" +
             "    * \"The Steel Vultures remember your work on the derelict last week.\"\n" +
             "  Keep references tonally consistent with the broker's faction + station.\n" +
+            "- ATMOSPHERIC MIRRORING: context.location.station_condition is a single-word\n" +
+            "  vibe tag for the station. Shift the broker's linguistic register to match:\n" +
+            "    * war-torn  → clipped, urgent, military cadence. Short sentences. Less\n" +
+            "                  small talk; more \"we need this done yesterday.\"\n" +
+            "    * peaceful  → relaxed, collegial. Reference safety, good weather,\n" +
+            "                  quiet lanes. Nothing threatening in the subtext.\n" +
+            "    * bustling  → busy, practical, slightly impersonal. The broker has\n" +
+            "                  three other deals going; keep it efficient.\n" +
+            "    * frontier  → laconic, self-reliant, rough edges. Few facilities,\n" +
+            "                  people know each other. Broker might reference knowing\n" +
+            "                  the local crews or recent arrivals.\n" +
+            "    * normal    → no special register; neutral.\n" +
+            "  The tag is a SOFT signal — don't caricature it, let it nudge word choice\n" +
+            "  and sentence length. Dialogue content still comes from mission_guidance.\n" +
             "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
             "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
             "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +

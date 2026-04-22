@@ -101,6 +101,10 @@ internal sealed class ContextGatherer
         // Final pass: derive mission guidance from the fully-populated context.
         // Must run last — reads every section.
         ctx.MissionGuidance = MissionGuidanceBuilder.Build(ctx);
+        // station_condition depends on MissionGuidance (combat-forbidden
+        // check), so it runs AFTER the guidance builder. Cheap — one
+        // boolean + one linq + one count.
+        ctx.Location.StationCondition = StationConditionInferrer.Infer(ctx);
         return ctx;
     }
 

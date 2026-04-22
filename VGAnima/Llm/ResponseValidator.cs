@@ -45,16 +45,17 @@ internal sealed class ResponseValidator
 
     private readonly MissionBlockValidator _missionValidator = new();
 
-    /// <summary>Parse with no cross-context — hostile-faction rule in the
-    /// mission-block validator is skipped. Used by tests and for the v1
-    /// dialogue-only path.</summary>
+    /// <summary>Parse with no cross-context — hostile-faction rule and
+    /// forbidden-archetype rule in the mission-block validator are
+    /// skipped. Used by tests and for the v1 dialogue-only path.</summary>
     public LlmStory Parse(string rawContent)
-        => Parse(rawContent, atWar: null, reputation: null);
+        => Parse(rawContent, atWar: null, reputation: null, forbiddenArchetypes: null);
 
     public LlmStory Parse(
         string rawContent,
         IReadOnlyList<string>? atWar,
-        IReadOnlyDictionary<string, int>? reputation)
+        IReadOnlyDictionary<string, int>? reputation,
+        IReadOnlyList<string>? forbiddenArchetypes = null)
     {
         JToken root;
         try
@@ -109,7 +110,8 @@ internal sealed class ResponseValidator
             mission = _missionValidator.Parse(
                 missionTok,
                 atWar      ?? Array.Empty<string>(),
-                reputation ?? new Dictionary<string, int>());
+                reputation ?? new Dictionary<string, int>(),
+                forbiddenArchetypes);
         }
 
         return new LlmStory(pitch, checkIn, payout, mission);

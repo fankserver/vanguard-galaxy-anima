@@ -106,6 +106,11 @@ internal sealed class LlmLocationSection
     [JsonProperty("current_sector")]      public string CurrentSector { get; set; } = string.Empty;
     [JsonProperty("quadrant")]            public int Quadrant { get; set; }
     [JsonProperty("connected_systems")]   public IReadOnlyList<LlmSystemSnapshot> ConnectedSystems { get; set; } = null!;
+    /// <summary>Single-word atmosphere tag derived by
+    /// <see cref="StationConditionInferrer"/>. Feeds the prompt's
+    /// linguistic-register rule. Values: <c>war-torn</c>, <c>peaceful</c>,
+    /// <c>bustling</c>, <c>frontier</c>, <c>normal</c>.</summary>
+    [JsonProperty("station_condition")]   public string StationCondition { get; set; } = "normal";
 }
 
 internal sealed record LlmSystemSnapshot(

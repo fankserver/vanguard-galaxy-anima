@@ -875,6 +875,150 @@ public class MissionBlockValidatorTests
         Assert.Equal(2, block.Steps.Count);
     }
 
+    // ---------- Forbidden-archetype enforcement ----------
+
+    [Fact]
+    public void Parse_CombatForbidden_RejectsClearPoi()
+    {
+        var mission = BuildGood();
+        var clear = new JObject
+        {
+            ["type"]          = "ClearPoi",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear the zone.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(clear),
+        });
+        var ex = Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
+                                    forbiddenArchetypes: new[] { "combat" }));
+        Assert.Contains("combat", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_CombatForbidden_RejectsKillEnemies()
+    {
+        var mission = BuildGood();
+        var kill = new JObject
+        {
+            ["type"]            = "KillEnemies",
+            ["enemy_faction"]   = "Marauders",
+            ["required_amount"] = 3,
+            ["description"]     = "Kill three.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(kill),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
+                                    forbiddenArchetypes: new[] { "combat" }));
+    }
+
+    [Fact]
+    public void Parse_CombatForbidden_RejectsGuardsFactionOnCollect()
+    {
+        // The original scenario C bug — LLM kept attaching guards_faction
+        // to a gather mission even when combat was in forbidden_archetypes.
+        // Now validator rejects, so the backstop is mechanical.
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Ore",
+            ["required_amount"] = 10,
+            ["description"]     = "Mine the field.",
+            ["guards_faction"]  = "Marauders",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        var ex = Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
+                                    forbiddenArchetypes: new[] { "combat" }));
+        Assert.Contains("guards_faction", ex.Message);
+        Assert.Contains("combat", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_CombatForbidden_AllowsPlainCollect()
+    {
+        // Without guards_faction, Ore/Salvage collects are pure gather —
+        // allowed even when combat is forbidden.
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Ore",
+            ["required_amount"] = 10,
+            ["description"]     = "Mine the field, no defenders.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
+                                      forbiddenArchetypes: new[] { "combat" });
+        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
+        Assert.Null(obj.GuardsFaction);
+    }
+
+    [Fact]
+    public void Parse_EscortForbidden_RejectsProtectUnit()
+    {
+        var mission = BuildGood();
+        var protect = new JObject
+        {
+            ["type"]         = "ProtectUnit",
+            ["protect_text"] = "Keep the freighter alive.",
+        };
+        // Pair with a non-ProtectUnit to satisfy the "mission must have at
+        // least one non-ProtectUnit" rule — irrelevant here since validator
+        // rejects on the forbidden check first, but keeps the mission
+        // otherwise well-formed.
+        var trigger = new JObject
+        {
+            ["type"]            = "TriggerObjective",
+            ["trigger"]         = "ArrivedAtSpaceStation",
+            ["required_amount"] = 1,
+            ["description"]     = "Arrive.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(protect, trigger),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
+                                    forbiddenArchetypes: new[] { "escort" }));
+    }
+
+    [Fact]
+    public void Parse_NoForbiddenList_DefaultsToAllAllowed()
+    {
+        // Backwards compat: passing null or omitting forbiddenArchetypes
+        // lets every archetype through, matching pre-forbidden behavior.
+        var mission = BuildGood();
+        var clear = new JObject
+        {
+            ["type"]          = "ClearPoi",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(clear),
+        });
+        // Both nullable + omitted work.
+        var block1 = Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
+                                        forbiddenArchetypes: null);
+        Assert.IsType<LlmClearPoi>(block1.Steps[0].Objectives[0]);
+        var block2 = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
+        Assert.IsType<LlmClearPoi>(block2.Steps[0].Objectives[0]);
+    }
+
     // ---------- ClearPoi ----------
 
     [Fact]
