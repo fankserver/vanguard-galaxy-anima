@@ -115,6 +115,105 @@ public class JournalContextBuilderTests
         Assert.Equal(JournalContextBuilder.NotableWindowSize, section.Notable.Count);
     }
 
+    // ---------- Active window (in-flight entries) ----------
+
+    private static PersistedEntry InFlight(
+        string storyId, string stationId, string faction, double createdGameSeconds = 100.0)
+    {
+        var block = new LlmMissionBlock(
+            Name: $"Mission-{storyId}", Description: "d", CompletionText: "c",
+            SourceFaction: faction,
+            Steps:   new[] { new LlmMissionStep(
+                new LlmObjective[] { new LlmClearPoi("Marauders", "x") }) },
+            Rewards: new System.Collections.Generic.List<LlmReward>());
+        var story  = new LlmStory(
+            new[] { "pitch" }, new[] { "check" }, new[] { "pay" }, block);
+        var broker = new PersistedBroker(
+            Seed: "seed-" + storyId, StationId: stationId, Story: story,
+            NameSnapshot: "Broker", StationNameSnapshot: "Station",
+            SystemNameSnapshot: "System");
+        return new PersistedEntry(
+            StoryId: storyId, State: PersistedEntryStates.Accepted,
+            MissionBlock: block, Broker: broker,
+            Timestamps: new PersistedTimestamps(
+                CreatedGameSeconds:  createdGameSeconds,
+                CreatedRealUtc:      "2026-04-22T00:00:00Z",
+                LastSeenGameSeconds: createdGameSeconds,
+                LastSeenRealUtc:     "2026-04-22T00:00:00Z"));
+    }
+
+    [Fact]
+    public void Build_Active_NullInput_ReturnsEmpty()
+    {
+        var section = JournalContextBuilder.Build(
+            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
+            inFlight: null);
+        Assert.Empty(section.Active);
+    }
+
+    [Fact]
+    public void Build_Active_FiltersToSameStationOrSameFaction()
+    {
+        // "hostile-station-different-faction" (e2) is excluded — neither
+        // same station nor same faction; the broker wouldn't know about it.
+        var inFlight = new[]
+        {
+            InFlight("e1", "station-A", "SalvageGuild"),   // same station
+            InFlight("e2", "station-X", "MiningGuild"),    // excluded
+            InFlight("e3", "station-B", "SalvageGuild"),   // same faction, diff station
+        };
+        var section = JournalContextBuilder.Build(
+            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
+            inFlight: inFlight);
+        Assert.Equal(2, section.Active.Count);
+        Assert.All(section.Active,
+            e => Assert.Contains(e.StoryId, new[] { "e1", "e3" }));
+    }
+
+    [Fact]
+    public void Build_Active_OrdersByStationThenFaction()
+    {
+        // Same-station entries come first (higher priority), then
+        // same-faction-elsewhere. Within a tier, newest-first.
+        var inFlight = new[]
+        {
+            InFlight("e-far",    "station-B", "SalvageGuild", createdGameSeconds: 50),
+            InFlight("e-local1", "station-A", "SalvageGuild", createdGameSeconds: 20),
+            InFlight("e-local2", "station-A", "SalvageGuild", createdGameSeconds: 30),
+        };
+        var section = JournalContextBuilder.Build(
+            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
+            inFlight: inFlight);
+        Assert.Equal(3, section.Active.Count);
+        Assert.Equal("e-local2", section.Active[0].StoryId); // newest local first
+        Assert.Equal("e-local1", section.Active[1].StoryId);
+        Assert.Equal("e-far",    section.Active[2].StoryId); // factional last
+    }
+
+    [Fact]
+    public void Build_Active_MarksEntriesAsInProgress()
+    {
+        var inFlight = new[] { InFlight("e1", "station-A", "SalvageGuild") };
+        var section = JournalContextBuilder.Build(
+            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
+            inFlight: inFlight);
+        Assert.Single(section.Active);
+        Assert.Equal(CompletedMissionOutcomes.InProgress, section.Active[0].Outcome);
+    }
+
+    [Fact]
+    public void Build_Active_RespectsSizeCap()
+    {
+        var inFlight = Enumerable.Range(0, 20)
+            .Select(i => InFlight($"e{i}", "station-A", "SalvageGuild",
+                                  createdGameSeconds: i))
+            .ToList();
+        var section = JournalContextBuilder.Build(
+            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
+            inFlight: inFlight);
+        Assert.Equal(JournalContextBuilder.ActiveWindowSize, section.Active.Count);
+    }
+
     [Fact]
     public void Build_OrdersRecentFirst()
     {

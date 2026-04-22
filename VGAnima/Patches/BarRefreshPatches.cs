@@ -401,7 +401,8 @@ internal static class BarRefreshPatches
                 journal = JournalContextBuilder.Build(
                     plugin.PersistedRegistry.CompletedMissions,
                     stationId:         station.guid,
-                    factionIdentifier: brokerInfo.StationFaction);
+                    factionIdentifier: brokerInfo.StationFaction,
+                    inFlight:          plugin.PersistedRegistry.All());
             }
             context = plugin.Gatherer.Gather(plugin.GameStateView, brokerInfo, journal);
         }
@@ -811,6 +812,28 @@ internal static class BarRefreshPatches
             "  defenders AND loot at the same place. Do NOT collapse a multi-site or\n" +
             "  multi-phase narrative into one step just because it validates — the pitch will\n" +
             "  promise more than the mission delivers.\n" +
+            "- JOURNAL — context.journal (if present) lists missions the player ALREADY has\n" +
+            "  history with. Four windows:\n" +
+            "    * local     — resolved events at THIS station (bar gossip).\n" +
+            "    * factional — resolved events with the SAME faction elsewhere.\n" +
+            "    * notable   — resolved high-magnitude events galaxy-wide.\n" +
+            "    * active    — IN-FLIGHT missions (offered or accepted, not yet resolved).\n" +
+            "  Non-duplication is LOAD-BEARING:\n" +
+            "    * DO NOT reuse a journal entry's mission_name, description, or\n" +
+            "      completion_text. Each entry is a DIFFERENT mission; emitting the same\n" +
+            "      name/framing gives the player the impression they're being offered the\n" +
+            "      same job twice.\n" +
+            "    * DO NOT offer a new mission that duplicates an `active` entry on\n" +
+            "      archetype + faction + site. If the active window has a\n" +
+            "      defended-collect job against Marauders at this station, pitch a\n" +
+            "      different shape (pure-combat, delivery, different faction, different\n" +
+            "      system) instead of another defended-collect-Marauders.\n" +
+            "  You MAY reference journal entries organically in dialogue:\n" +
+            "    * \"You've been hunting Corsairs out here lately — appreciate the help.\"\n" +
+            "    * \"I heard you're already running a salvage contract — let me pitch\n" +
+            "       something different then.\"\n" +
+            "    * \"The Steel Vultures remember your work on the derelict last week.\"\n" +
+            "  Keep references tonally consistent with the broker's faction + station.\n" +
             "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
             "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
             "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +
@@ -1343,6 +1366,28 @@ internal static class RegistryRehydratePatches
             "  defenders AND loot at the same place. Do NOT collapse a multi-site or\n" +
             "  multi-phase narrative into one step just because it validates — the pitch will\n" +
             "  promise more than the mission delivers.\n" +
+            "- JOURNAL — context.journal (if present) lists missions the player ALREADY has\n" +
+            "  history with. Four windows:\n" +
+            "    * local     — resolved events at THIS station (bar gossip).\n" +
+            "    * factional — resolved events with the SAME faction elsewhere.\n" +
+            "    * notable   — resolved high-magnitude events galaxy-wide.\n" +
+            "    * active    — IN-FLIGHT missions (offered or accepted, not yet resolved).\n" +
+            "  Non-duplication is LOAD-BEARING:\n" +
+            "    * DO NOT reuse a journal entry's mission_name, description, or\n" +
+            "      completion_text. Each entry is a DIFFERENT mission; emitting the same\n" +
+            "      name/framing gives the player the impression they're being offered the\n" +
+            "      same job twice.\n" +
+            "    * DO NOT offer a new mission that duplicates an `active` entry on\n" +
+            "      archetype + faction + site. If the active window has a\n" +
+            "      defended-collect job against Marauders at this station, pitch a\n" +
+            "      different shape (pure-combat, delivery, different faction, different\n" +
+            "      system) instead of another defended-collect-Marauders.\n" +
+            "  You MAY reference journal entries organically in dialogue:\n" +
+            "    * \"You've been hunting Corsairs out here lately — appreciate the help.\"\n" +
+            "    * \"I heard you're already running a salvage contract — let me pitch\n" +
+            "       something different then.\"\n" +
+            "    * \"The Steel Vultures remember your work on the derelict last week.\"\n" +
+            "  Keep references tonally consistent with the broker's faction + station.\n" +
             "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
             "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
             "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +

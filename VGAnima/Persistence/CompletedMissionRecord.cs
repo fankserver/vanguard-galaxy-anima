@@ -32,9 +32,13 @@ internal sealed record CompletedMissionRecord(
 
 internal static class CompletedMissionOutcomes
 {
-    public const string Completed = "completed";
-    public const string Failed    = "failed";
-    public const string Abandoned = "abandoned";
+    public const string Completed  = "completed";
+    public const string Failed     = "failed";
+    public const string Abandoned  = "abandoned";
+    // Used only by the journal's `active` window — marks entries that
+    // are still in flight (state = offered or accepted) so the LLM can
+    // distinguish them from resolved history when reading context.
+    public const string InProgress = "in_progress";
 }
 
 internal static class MissionArchetypes

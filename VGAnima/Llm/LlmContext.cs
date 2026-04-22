@@ -182,21 +182,32 @@ internal sealed record BrokerInfo(
     string Seed,
     string StationFaction);
 
-/// <summary>Per-broker journal view. Three windows — local / factional /
-/// notable — built by <see cref="JournalContextBuilder"/>. Each entry is a
-/// compact snapshot of a resolved VGAnima mission. The LLM reads these as
-/// narrative anchors ("you've been salvaging here lately", "the Steel
-/// Vultures have been talking about your work").</summary>
+/// <summary>Per-broker journal view. Four windows built by
+/// <see cref="JournalContextBuilder"/>: three for RESOLVED missions
+/// (local / factional / notable) and one for IN-FLIGHT missions
+/// (active). Each entry is a compact snapshot the LLM reads as narrative
+/// anchors — "you've been salvaging here lately" / "I heard you're
+/// already running a Corsair job, let me pitch something different."
+///
+/// <para>Why active is a peer window, not a substate: an offered or
+/// accepted mission that hasn't resolved yet is load-bearing for
+/// duplicate avoidance. Without it, two brokers at the same bar can
+/// offer near-identical jobs because neither sees the other's
+/// in-flight entry.</para></summary>
 internal sealed class LlmJournalSection
 {
-    /// <summary>Recent events at THIS station. Bar-gossip level of detail.</summary>
+    /// <summary>Resolved events at THIS station. Bar-gossip level of detail.</summary>
     [JsonProperty("local")]     public IReadOnlyList<LlmJournalEntry> Local     { get; set; } = null!;
-    /// <summary>Recent events involving the SAME faction elsewhere. Intel-
+    /// <summary>Resolved events involving the SAME faction elsewhere. Intel-
     /// network level; the broker heard through channels.</summary>
     [JsonProperty("factional")] public IReadOnlyList<LlmJournalEntry> Factional { get; set; } = null!;
-    /// <summary>High-magnitude events regardless of location. Famous deeds
-    /// travel everywhere.</summary>
+    /// <summary>Resolved high-magnitude events regardless of location.
+    /// Famous deeds travel everywhere.</summary>
     [JsonProperty("notable")]   public IReadOnlyList<LlmJournalEntry> Notable   { get; set; } = null!;
+    /// <summary>IN-FLIGHT missions the broker can plausibly know about
+    /// (same station OR same faction elsewhere). Outcome is always
+    /// <c>"in_progress"</c>. Used by the prompt's non-duplication rule.</summary>
+    [JsonProperty("active")]    public IReadOnlyList<LlmJournalEntry> Active    { get; set; } = null!;
 }
 
 internal sealed record LlmJournalEntry(
