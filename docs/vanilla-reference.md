@@ -562,3 +562,104 @@ SavesPath = Application.persistentDataPath + "/Saves";
 ```
 
 Save files live at `{persistentDataPath}/Saves/{saveName}.save`. Sidecar lives at `{persistentDataPath}/Saves/{saveName}.save.vganima.json`. Startup dead-sidecar sweep enumerates `*.vganima.json` in this directory and drops any whose paired `.save` is gone.
+
+---
+
+## Modal confirmation popup — `AlertPopup`
+
+`Behaviour.UI.AlertPopup` (`Behaviour.UI/AlertPopup.cs`) is vanilla's modal
+dialog used for Yes/No confirmations, free-text input, and one-button
+messages. It auto-pauses the game on `Start` (`GameManager.Pause()`) and
+unpauses on `OnDestroy` — so a popup blocks simulation until the player
+answers. It renders inside `UITooltip.tooltipParent`, sits above all
+normal UI, and destroys itself when any button is pressed.
+
+The three public entry points:
+
+| API | Buttons | Callback shape |
+|---|---|---|
+| `ShowMessage(msg, buttonLabel?, onConfirm?)` | 1 (defaults to `@UIConfirm`) | `Action onConfirm` |
+| `ShowQuery(msg, yesLabel?, noLabel?, onYes?, onNo?, thirdLabel?, onThird?)` | 2 or 3 (defaults `@UIYes`/`@UINo`) | `Action onYes`, `Action onNo`, optional `Action onThird` |
+| `ShowInput(label, onSubmit, submitLabel?, defaultValue?, allowCancel?, cancelLabel?, onCancel?)` | 1 or 2 + text field | `Action<string> onSubmit`, `Action onCancel` |
+
+`msg` and button labels are fed through `TMP_Text.TL(...)` (translation
+lookup), so `@Key` strings resolve via the localization table; plain
+strings render as-is. Enter / numpad-enter in an input field fires the
+first button (the "submit" action). The popup does not carry a
+cancellation-vs-close distinction — pressing any button destroys it, so
+"close" is whatever the Y/N/third callback does (or does not do).
+
+### Canonical dialogue-gated confirmation pattern
+
+The "Keril" Umbral-5 sequence is the reference example: a dialogue plays,
+then a popup asks the player to commit. The wiring is in
+`Source.Dialogues/Characters.cs` + `Source.Simulation.Story/Puppeteers.cs`:
+
+```csharp
+// Characters.cs:213
+public static Character ExpeditionKolyatovCaptain()
+{
+    Character character = Character.CreateCharacter("Keril")
+        .WithDescription("Kolyatov Conscript")
+        .WithPortret(Resources.Load<Sprite>("Sprites/NPC/M3Kolyatov"));
+    character.AddDialogue(
+        MissionTrigger.Umbral5KolyatovAttack,
+        Puppeteers.Umbral5bKolyatovAttack,   // dialogue (3 lines)
+        AttackSteelVultures,                 // onComplete → popup
+        conditionalTrigger: true);           // defer MissionObjective.Trigger
+    ...
+}
+
+// Characters.cs:318
+public static void AttackSteelVultures()
+{
+    AlertPopup.ShowQuery("@UmbralM5AttackSteelVultures", "Attack", "Cancel",
+        delegate { UmbralMissions.AttackChoiceSteelVultures(); });
+}
+```
+
+The dialogue ("Don't worry about your standing, there won't be any
+evidence of your involvement. / They'll all be dead.") plays first, then
+the `onComplete` runs `AlertPopup.ShowQuery(...)` which waits on the
+player.
+
+### The `conditionalTrigger: true` flag — why it matters
+
+In `Behaviour.Dialogues/CharacterMono.cs:62-87` (`TalkTo`), vanilla's
+dialogue manager auto-fires the mission objective when `conditionalTrigger`
+is **false**:
+
+```csharp
+if (!dialogue.conditionalTrigger)
+    MissionObjective.Trigger(trigger.Value, 1);
+Singleton<DialogueManager>.Instance.StartDialogue(dialogue.dialogues(), dialogue.onComplete);
+```
+
+With `conditionalTrigger: true`, the auto-fire is skipped. The
+`onComplete` callback (here `AttackSteelVultures`) is then responsible
+for deciding whether to advance the mission — usually by popping an
+`AlertPopup.ShowQuery` whose Yes branch calls
+`MissionObjective.Trigger(...)` (or a wrapper like
+`UmbralMissions.AttackChoiceSteelVultures`) and whose No branch does
+nothing. This is how vanilla models "player must confirm a commit"
+dialogue gates.
+
+### Other call sites worth knowing
+
+| Call site | Pattern |
+|---|---|
+| `MissionDetails.cs:232` | Abandon-mission confirmation (`@UIMissionAbandonQuery`) |
+| `CrewLocal.cs:233` | Dismiss officer (`@RemoveOfficerQuery`) |
+| `ResetSkilltrees.cs:38` | Respec confirmation (`@RespecPopup`) |
+| `FactionSkirmish.cs:231` | Pick which side of a 2-way skirmish to help |
+| `SpaceStationInterior.cs:544` | No-ammo-for-turret-quest exit warning (3-button: exit / airlock) |
+| `GamePlayer.cs:1788` | At-war warning when accepting a mission against a now-friendly faction |
+| `SaveGame.cs:61`, `SaveGameFile.cs:39` | Load errors (`ShowMessage`, not query) |
+
+### VGAnima usage
+
+Not currently used. If a future broker mission needs a player
+commitment gate (e.g. "accept this job means declaring war on
+$faction — confirm?"), match the vanilla pattern:
+`AddDialogue(..., onComplete: ShowConfirmationPopup, conditionalTrigger: true)`
+with the popup's Yes branch doing the actual accept call.

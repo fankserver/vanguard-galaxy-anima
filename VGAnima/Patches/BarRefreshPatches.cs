@@ -647,7 +647,10 @@ internal static class BarRefreshPatches
         }
     }
 
-    private static string BuildSystemPrompt()
+    // internal (not private) so VGAnima.Tests can snapshot the live prompt
+    // for offline LLM evaluation harnesses. No runtime caller outside this
+    // file.
+    internal static string BuildSystemPrompt()
     {
         // v2-mission system prompt per spec §8.
         return
@@ -686,20 +689,36 @@ internal static class BarRefreshPatches
             "  { \"type\": \"CollectItemTypes\",\n" +
             "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods],\n" +
             "    \"required_amount\": 1..50,\n" +
-            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars>,\n" +
+            "    \"guards_faction\":  <hostile faction from list above, OPTIONAL> }\n" +
             "      Ore and Salvage auto-spawn a dedicated POI on the system map\n" +
             "      (asteroid field for Ore, derelict fleet for Salvage) so the player\n" +
             "      has a specific place to go. RefinedProduct and TradeGoods do NOT\n" +
             "      spawn a POI — those are sourced through refineries / traders, so\n" +
             "      the pitch should frame them as 'bring me N units you've got lying\n" +
             "      around' rather than 'go to this location.'\n" +
+            "      guards_faction: HARD-GATED to item_category Ore or Salvage.\n" +
+            "      The validator rejects guards_faction on RefinedProduct or\n" +
+            "      TradeGoods outright (those categories have no POI to attach\n" +
+            "      units to). When valid, it attaches hostile combat units to\n" +
+            "      the spawned POI — one POI with defenders inside, no separate\n" +
+            "      ClearPoi needed. Mirrors vanilla's defended-salvage pattern.\n" +
+            "      If set, the pitch should reference the defenders AND the\n" +
+            "      loot (\"the Corsair Syndicate is camping the wreck — fight\n" +
+            "      through them and bring back the scrap\").\n" +
+            "      DO NOT set guards_faction when `combat` is in\n" +
+            "      forbidden_archetypes — defenders count as combat, see the\n" +
+            "      archetype section below.\n" +
             "  { \"type\": \"ClearPoi\",\n" +
             "    \"enemy_faction\":   <hostile faction from list above>,\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "      Spawns a dedicated combat zone on the system map. Use ONLY when the\n" +
-            "      mission is genuinely 'go fight at a specific place.' When you DO pick\n" +
-            "      combat, prefer ClearPoi over KillEnemies; required_amount is auto-\n" +
-            "      computed from the spawn, so do not specify one.\n\n" +
+            "      mission is genuinely 'go fight at a specific place' with NO loot to\n" +
+            "      bring back. If the site also has salvage/ore to collect, DO NOT emit\n" +
+            "      ClearPoi — use CollectItemTypes with guards_faction instead (one POI,\n" +
+            "      one Locate target). When you DO pick pure combat, prefer ClearPoi\n" +
+            "      over KillEnemies; required_amount is auto-computed from the spawn,\n" +
+            "      so do not specify one.\n\n" +
             "REWARD TYPES:\n" +
             "  { \"type\": \"Credits\",    \"base_value\": 15..100 }\n" +
             "  { \"type\": \"Experience\", \"base_value\": 30..100 }\n" +
@@ -721,6 +740,17 @@ internal static class BarRefreshPatches
             "  top pick a bad fit (rare). Do NOT pick an archetype listed in\n" +
             "  mission_guidance.forbidden_archetypes — those are impossible given the context\n" +
             "  (e.g. combat forbidden when no hostile faction exists).\n" +
+            "  When `combat` is listed in forbidden_archetypes, ALL of the following are\n" +
+            "  forbidden — treat the ENTIRE mission as non-combat:\n" +
+            "    * NO ClearPoi objectives.\n" +
+            "    * NO KillEnemies objectives.\n" +
+            "    * NO guards_faction on CollectItemTypes (guards spawn hostile units at\n" +
+            "      the POI, which is combat).\n" +
+            "    * NO mentioning defenders, raiders, ambushes, or hostile presence in the\n" +
+            "      pitch / check-in / payout lines. The site is safe. The job is peaceful.\n" +
+            "  Even when hostile factions exist in context.factions (Marauders etc.),\n" +
+            "  they are simply unavailable for THIS mission. Pick a gather/deliver/escort\n" +
+            "  shape with no combat element whatsoever.\n" +
             "  The five archetypes map to these objective types:\n" +
             "    * combat  → ClearPoi (preferred) or KillEnemies. Requires a hostile faction.\n" +
             "    * gather  → CollectItemTypes with item_category Ore or RefinedProduct.\n" +
@@ -743,6 +773,30 @@ internal static class BarRefreshPatches
             "  the same step. ClearPoi auto-completes when its spawned zone is cleared; KillEnemies\n" +
             "  counts ANY kill of that faction anywhere — mixing them creates a 'main mission done,\n" +
             "  stragglers still pending' shape that's awkward. Pick one combat verb per step.\n" +
+            "- AT MOST ONE POI-SPAWNING OBJECTIVE PER STEP. ClearPoi and CollectItemTypes with\n" +
+            "  item_category Ore or Salvage both spawn a dedicated POI on the map; a step's\n" +
+            "  Locate button can only track ONE. Two in the same step orphans the second POI.\n" +
+            "    * Defended gather site (fight and loot the same place) → emit ONE\n" +
+            "      CollectItemTypes objective with guards_faction set; do NOT also emit ClearPoi.\n" +
+            "    * Clear one zone, then gather elsewhere → emit TWO SEPARATE STEPS (step 1 =\n" +
+            "      ClearPoi, step 2 = CollectItemTypes). Vanilla missions use this shape when\n" +
+            "      the combat and gather sites are genuinely different places.\n" +
+            "- MULTI-STEP IS A FIRST-CLASS SHAPE, NOT A FALLBACK. You have 1..3 steps. Use 2-3\n" +
+            "  steps when the narrative mentions multiple locations, phased objectives, or\n" +
+            "  compound tasks. The Locate button advances step-by-step, so each step is its own\n" +
+            "  waypoint for the player. Good multi-step shapes:\n" +
+            "    * \"Clear three pirate camps\" → 3 steps, each with one ClearPoi pointing at a\n" +
+            "      different spawned POI. Three Locate waypoints in sequence.\n" +
+            "    * \"Fight through the Corsairs and recover repair materials\" → 2 steps:\n" +
+            "      [ClearPoi(Marauders)] then [CollectItemTypes(Salvage)]. Two separate POIs.\n" +
+            "    * \"Mine the field, then haul the output to Station X\" → 2 steps:\n" +
+            "      [CollectItemTypes(Ore)] then [TriggerObjective(DockedWithSpaceStation)].\n" +
+            "    * \"Take out three Marauder patrols, then deliver the intel\" → 3 steps:\n" +
+            "      [ClearPoi] [ClearPoi] [TriggerObjective]. Three waypoints.\n" +
+            "  The one-step defended-collect pattern is the right shape for a SINGLE site with\n" +
+            "  defenders AND loot at the same place. Do NOT collapse a multi-site or\n" +
+            "  multi-phase narrative into one step just because it validates — the pitch will\n" +
+            "  promise more than the mission delivers.\n" +
             "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
             "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
             "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +
@@ -1127,20 +1181,36 @@ internal static class RegistryRehydratePatches
             "  { \"type\": \"CollectItemTypes\",\n" +
             "    \"item_category\":   one of [Ore, Salvage, RefinedProduct, TradeGoods],\n" +
             "    \"required_amount\": 1..50,\n" +
-            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
+            $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars>,\n" +
+            "    \"guards_faction\":  <hostile faction from list above, OPTIONAL> }\n" +
             "      Ore and Salvage auto-spawn a dedicated POI on the system map\n" +
             "      (asteroid field for Ore, derelict fleet for Salvage) so the player\n" +
             "      has a specific place to go. RefinedProduct and TradeGoods do NOT\n" +
             "      spawn a POI — those are sourced through refineries / traders, so\n" +
             "      the pitch should frame them as 'bring me N units you've got lying\n" +
             "      around' rather than 'go to this location.'\n" +
+            "      guards_faction: HARD-GATED to item_category Ore or Salvage.\n" +
+            "      The validator rejects guards_faction on RefinedProduct or\n" +
+            "      TradeGoods outright (those categories have no POI to attach\n" +
+            "      units to). When valid, it attaches hostile combat units to\n" +
+            "      the spawned POI — one POI with defenders inside, no separate\n" +
+            "      ClearPoi needed. Mirrors vanilla's defended-salvage pattern.\n" +
+            "      If set, the pitch should reference the defenders AND the\n" +
+            "      loot (\"the Corsair Syndicate is camping the wreck — fight\n" +
+            "      through them and bring back the scrap\").\n" +
+            "      DO NOT set guards_faction when `combat` is in\n" +
+            "      forbidden_archetypes — defenders count as combat, see the\n" +
+            "      archetype section below.\n" +
             "  { \"type\": \"ClearPoi\",\n" +
             "    \"enemy_faction\":   <hostile faction from list above>,\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "      Spawns a dedicated combat zone on the system map. Use ONLY when the\n" +
-            "      mission is genuinely 'go fight at a specific place.' When you DO pick\n" +
-            "      combat, prefer ClearPoi over KillEnemies; required_amount is auto-\n" +
-            "      computed from the spawn, so do not specify one.\n\n" +
+            "      mission is genuinely 'go fight at a specific place' with NO loot to\n" +
+            "      bring back. If the site also has salvage/ore to collect, DO NOT emit\n" +
+            "      ClearPoi — use CollectItemTypes with guards_faction instead (one POI,\n" +
+            "      one Locate target). When you DO pick pure combat, prefer ClearPoi\n" +
+            "      over KillEnemies; required_amount is auto-computed from the spawn,\n" +
+            "      so do not specify one.\n\n" +
             "REWARD TYPES:\n" +
             "  { \"type\": \"Credits\",    \"base_value\": 15..100 }\n" +
             "  { \"type\": \"Experience\", \"base_value\": 30..100 }\n" +
@@ -1162,6 +1232,17 @@ internal static class RegistryRehydratePatches
             "  top pick a bad fit (rare). Do NOT pick an archetype listed in\n" +
             "  mission_guidance.forbidden_archetypes — those are impossible given the context\n" +
             "  (e.g. combat forbidden when no hostile faction exists).\n" +
+            "  When `combat` is listed in forbidden_archetypes, ALL of the following are\n" +
+            "  forbidden — treat the ENTIRE mission as non-combat:\n" +
+            "    * NO ClearPoi objectives.\n" +
+            "    * NO KillEnemies objectives.\n" +
+            "    * NO guards_faction on CollectItemTypes (guards spawn hostile units at\n" +
+            "      the POI, which is combat).\n" +
+            "    * NO mentioning defenders, raiders, ambushes, or hostile presence in the\n" +
+            "      pitch / check-in / payout lines. The site is safe. The job is peaceful.\n" +
+            "  Even when hostile factions exist in context.factions (Marauders etc.),\n" +
+            "  they are simply unavailable for THIS mission. Pick a gather/deliver/escort\n" +
+            "  shape with no combat element whatsoever.\n" +
             "  The five archetypes map to these objective types:\n" +
             "    * combat  → ClearPoi (preferred) or KillEnemies. Requires a hostile faction.\n" +
             "    * gather  → CollectItemTypes with item_category Ore or RefinedProduct.\n" +
@@ -1184,6 +1265,30 @@ internal static class RegistryRehydratePatches
             "  the same step. ClearPoi auto-completes when its spawned zone is cleared; KillEnemies\n" +
             "  counts ANY kill of that faction anywhere — mixing them creates a 'main mission done,\n" +
             "  stragglers still pending' shape that's awkward. Pick one combat verb per step.\n" +
+            "- AT MOST ONE POI-SPAWNING OBJECTIVE PER STEP. ClearPoi and CollectItemTypes with\n" +
+            "  item_category Ore or Salvage both spawn a dedicated POI on the map; a step's\n" +
+            "  Locate button can only track ONE. Two in the same step orphans the second POI.\n" +
+            "    * Defended gather site (fight and loot the same place) → emit ONE\n" +
+            "      CollectItemTypes objective with guards_faction set; do NOT also emit ClearPoi.\n" +
+            "    * Clear one zone, then gather elsewhere → emit TWO SEPARATE STEPS (step 1 =\n" +
+            "      ClearPoi, step 2 = CollectItemTypes). Vanilla missions use this shape when\n" +
+            "      the combat and gather sites are genuinely different places.\n" +
+            "- MULTI-STEP IS A FIRST-CLASS SHAPE, NOT A FALLBACK. You have 1..3 steps. Use 2-3\n" +
+            "  steps when the narrative mentions multiple locations, phased objectives, or\n" +
+            "  compound tasks. The Locate button advances step-by-step, so each step is its own\n" +
+            "  waypoint for the player. Good multi-step shapes:\n" +
+            "    * \"Clear three pirate camps\" → 3 steps, each with one ClearPoi pointing at a\n" +
+            "      different spawned POI. Three Locate waypoints in sequence.\n" +
+            "    * \"Fight through the Corsairs and recover repair materials\" → 2 steps:\n" +
+            "      [ClearPoi(Marauders)] then [CollectItemTypes(Salvage)]. Two separate POIs.\n" +
+            "    * \"Mine the field, then haul the output to Station X\" → 2 steps:\n" +
+            "      [CollectItemTypes(Ore)] then [TriggerObjective(DockedWithSpaceStation)].\n" +
+            "    * \"Take out three Marauder patrols, then deliver the intel\" → 3 steps:\n" +
+            "      [ClearPoi] [ClearPoi] [TriggerObjective]. Three waypoints.\n" +
+            "  The one-step defended-collect pattern is the right shape for a SINGLE site with\n" +
+            "  defenders AND loot at the same place. Do NOT collapse a multi-site or\n" +
+            "  multi-phase narrative into one step just because it validates — the pitch will\n" +
+            "  promise more than the mission delivers.\n" +
             "- FACTION NAMING: the context exposes each faction under its identifier (JSON key)\n" +
             "  with a display_name, relation (friendly|neutral|hostile), and reputation value.\n" +
             "    * In dialogue lines (pitch / check_in / payout), ALWAYS use the display_name.\n" +

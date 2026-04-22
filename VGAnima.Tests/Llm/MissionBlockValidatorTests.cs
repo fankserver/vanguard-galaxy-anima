@@ -617,6 +617,264 @@ public class MissionBlockValidatorTests
             () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
     }
 
+    // ---------- CollectItemTypes guards_faction ----------
+
+    [Fact]
+    public void Parse_CollectItemTypes_GuardsFaction_Salvage_HappyPath()
+    {
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Salvage",
+            ["required_amount"] = 10,
+            ["description"]     = "Recover salvage from the defended wreck.",
+            ["guards_faction"]  = "Marauders",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
+        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
+        Assert.Equal("Salvage",   obj.ItemCategory);
+        Assert.Equal("Marauders", obj.GuardsFaction);
+    }
+
+    [Fact]
+    public void Parse_CollectItemTypes_GuardsFaction_Ore_HappyPath()
+    {
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Ore",
+            ["required_amount"] = 5,
+            ["description"]     = "Mine the contested field.",
+            ["guards_faction"]  = "Darkspacers",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
+        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
+        Assert.Equal("Darkspacers", obj.GuardsFaction);
+    }
+
+    [Fact]
+    public void Parse_CollectItemTypes_NoGuardsFaction_LeavesFieldNull()
+    {
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Salvage",
+            ["required_amount"] = 3,
+            ["description"]     = "Undefended site.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
+        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
+        Assert.Null(obj.GuardsFaction);
+    }
+
+    [Fact]
+    public void Parse_CollectItemTypes_GuardsFaction_OnRefinedProduct_Rejects()
+    {
+        // RefinedProduct has no POI to attach guards to — acquired via
+        // refinery/trader, not by flying to a spawn. Must be rejected.
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "RefinedProduct",
+            ["required_amount"] = 3,
+            ["description"]     = "Bring refined goods.",
+            ["guards_faction"]  = "Marauders",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+    }
+
+    [Fact]
+    public void Parse_CollectItemTypes_GuardsFaction_OnTradeGoods_Rejects()
+    {
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "TradeGoods",
+            ["required_amount"] = 3,
+            ["description"]     = "Haul cargo.",
+            ["guards_faction"]  = "Marauders",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+    }
+
+    [Fact]
+    public void Parse_CollectItemTypes_GuardsFaction_NotWhitelisted_Rejects()
+    {
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Salvage",
+            ["required_amount"] = 3,
+            ["description"]     = "Site.",
+            ["guards_faction"]  = "NotARealFaction",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+    }
+
+    [Fact]
+    public void Parse_CollectItemTypes_GuardsFaction_FriendlyFaction_Rejects()
+    {
+        // Can't have TradingGuild defenders attacking the player — that's
+        // either a canon break or an accidental war. Same hostility rule
+        // as KillEnemies / ClearPoi.
+        var mission = BuildGood();
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Salvage",
+            ["required_amount"] = 3,
+            ["description"]     = "Site.",
+            ["guards_faction"]  = "TradingGuild",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(collect),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+    }
+
+    // ---------- Step-level: at most one POI-spawning objective ----------
+
+    [Fact]
+    public void Parse_Step_ClearPoiPlusCollectSalvage_Rejects()
+    {
+        // This is the exact shape that orphaned a POI in live play —
+        // ClearPoi + CollectItemTypes(Salvage) in one step competed for
+        // the step's single dynamicPointOfInterest slot.
+        var mission = BuildGood();
+        var clear = new JObject
+        {
+            ["type"]          = "ClearPoi",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear the combat zone.",
+        };
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Salvage",
+            ["required_amount"] = 5,
+            ["description"]     = "Recover salvage.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(clear, collect),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+    }
+
+    [Fact]
+    public void Parse_Step_ClearPoiPlusCollectOre_Rejects()
+    {
+        var mission = BuildGood();
+        var clear = new JObject
+        {
+            ["type"]          = "ClearPoi",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear the asteroid approach.",
+        };
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Ore",
+            ["required_amount"] = 5,
+            ["description"]     = "Mine the field.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(clear, collect),
+        });
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+    }
+
+    [Fact]
+    public void Parse_Step_ClearPoiPlusCollectTradeGoods_Allowed()
+    {
+        // TradeGoods doesn't spawn a POI, so the step still only has ONE
+        // POI-spawning objective (ClearPoi). Must be accepted.
+        var mission = BuildGood();
+        var clear = new JObject
+        {
+            ["type"]          = "ClearPoi",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear the zone.",
+        };
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "TradeGoods",
+            ["required_amount"] = 3,
+            ["description"]     = "Haul afterwards.",
+        };
+        mission["steps"] = new JArray(new JObject
+        {
+            ["objectives"] = new JArray(clear, collect),
+        });
+        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
+        Assert.Equal(2, block.Steps[0].Objectives.Count);
+    }
+
+    [Fact]
+    public void Parse_Steps_ClearPoiThenCollectSalvage_InSeparateSteps_Allowed()
+    {
+        // The "multi-location" shape: fight here, loot there. Each step
+        // carries one POI. This is how vanilla multi-step missions work.
+        var mission = BuildGood();
+        var clear = new JObject
+        {
+            ["type"]          = "ClearPoi",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear the escort.",
+        };
+        var collect = new JObject
+        {
+            ["type"]            = "CollectItemTypes",
+            ["item_category"]   = "Salvage",
+            ["required_amount"] = 5,
+            ["description"]     = "Then salvage the separate wreck.",
+        };
+        mission["steps"] = new JArray(
+            new JObject { ["objectives"] = new JArray(clear) },
+            new JObject { ["objectives"] = new JArray(collect) });
+        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
+        Assert.Equal(2, block.Steps.Count);
+    }
+
     // ---------- ClearPoi ----------
 
     [Fact]

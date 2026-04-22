@@ -171,7 +171,7 @@ internal static class MissionFactoryFromJson
                 };
 
             case LlmCollectItemTypes c:
-                return BuildCollectItemTypes(c, step, brokerStation, sourceFaction);
+                return BuildCollectItemTypes(c, step, brokerStation, sourceFaction, missionLevel);
 
             case LlmClearPoi cp:
                 return BuildClearPoi(cp, step, brokerStation, missionLevel);
@@ -215,12 +215,13 @@ internal static class MissionFactoryFromJson
     /// hazard chance defaults to vanilla's 0.5.</para></summary>
     private static MissionObjective BuildCollectItemTypes(
         LlmCollectItemTypes block, MissionStep step, SpaceStation? brokerStation,
-        Faction sourceFaction)
+        Faction sourceFaction, int missionLevel)
     {
         var category = Enum.Parse<ItemCategory>(block.ItemCategory);
 
         if (brokerStation != null)
         {
+            MapPointOfInterest? poi = null;
             switch (category)
             {
                 case ItemCategory.Ore:
@@ -228,21 +229,43 @@ internal static class MissionFactoryFromJson
                     // hazard level (0) — adversarial spawns come from vanilla's
                     // own `pirateChance` logic if enabled; keep it conservative
                     // for broker missions so "go mine X ore" doesn't secretly
-                    // become a combat encounter.
-                    var mining = brokerStation.system.AddMiningPoi(sourceFaction);
-                    step.dynamicPointOfInterest = mining;
+                    // become a combat encounter unless the LLM explicitly
+                    // requested defenders via `guards_faction` below.
+                    poi = brokerStation.system.AddMiningPoi(sourceFaction);
+                    step.dynamicPointOfInterest = poi;
                     break;
                 case ItemCategory.Salvage:
                     // Spawn a derelict-fleet debris field. Default ship
                     // template ("AncientWreck") + vanilla's 0.5 hazard chance.
                     // Each wreck carries its own item/scrap contents scaled
                     // to the system level.
-                    var salvage = brokerStation.system.AddDerelictFleetPoi(sourceFaction);
-                    step.dynamicPointOfInterest = salvage;
+                    poi = brokerStation.system.AddDerelictFleetPoi(sourceFaction);
+                    step.dynamicPointOfInterest = poi;
                     break;
                 // RefinedProduct / TradeGoods: no POI — player acquires these
                 // through normal trade, not by flying to a spawn. Falls
                 // through with no dynamicPointOfInterest set.
+            }
+
+            // Defended site — attach combat units to the spawned POI.
+            // Mirrors vanilla `SalvageWreck.GenerateMission` on Hard+ and
+            // `AddMiningPoi(pirateChance: true)`: one POI, one step, guards
+            // inside. The validator rejects guards_faction on categories
+            // without a POI (RefinedProduct / TradeGoods), and the Ore/
+            // Salvage branches above are the only ones that set `poi`,
+            // so `poi != null` is sufficient to know we can attach guards.
+            if (poi != null && block.GuardsFaction != null)
+            {
+                var guardsFaction = Faction.Get(block.GuardsFaction);
+                // Same scaling curve as BuildClearPoi so defended-gather
+                // encounters match the narrative weight of dedicated
+                // combat sites.
+                var payloadMultiplier = Math.Clamp(2f + missionLevel * 0.2f, 2f, 5f);
+                poi.AddGuards(poi.CreateUnitPayload(payloadMultiplier, GameplayType.Combat, guardsFaction));
+                // Tooltip hint on the map POI — matches vanilla's pattern
+                // (SalvageWreck sets dangerLevel to one of several hazard
+                // strings depending on difficulty).
+                poi.dangerLevel = "@MapPOIDangerPirates";
             }
         }
 

@@ -36,10 +36,25 @@ internal sealed record LlmTriggerObjective(
     int RequiredAmount,
     string Description) : LlmObjective;
 
+/// <summary>"Bring me N types of $category items." Factory spawns a
+/// resource POI (Ore → asteroid field, Salvage → derelict fleet) and
+/// pins it to the step. RefinedProduct / TradeGoods don't spawn a POI.
+///
+/// <para><see cref="GuardsFaction"/> is optional. When set on an Ore or
+/// Salvage objective, the factory calls <c>poi.AddGuards(...)</c> on the
+/// spawned POI with combat units of that faction — mirroring vanilla
+/// <c>SalvageWreck.GenerateMission</c> on Hard+ difficulty
+/// (Source.MissionSystem.Generator/SalvageWreck.cs:80) and vanilla's
+/// <c>AddMiningPoi(pirateChance: true)</c> for defended mining fields.
+/// One POI, one step, one Locate target — player fights the defenders
+/// AND loots the site, same place. Avoids the "two objectives fighting
+/// over dynamicPointOfInterest" pattern that orphaned POIs in v1.
+/// Not valid on RefinedProduct / TradeGoods (no POI to attach guards to).</para></summary>
 internal sealed record LlmCollectItemTypes(
     string ItemCategory,
     int RequiredAmount,
-    string Description) : LlmObjective;
+    string Description,
+    string? GuardsFaction = null) : LlmObjective;
 
 /// <summary>"Go to a POI and clear it of enemies." The factory spawns a
 /// fresh <c>Combat</c> POI in the broker-station's system (mirrors vanilla

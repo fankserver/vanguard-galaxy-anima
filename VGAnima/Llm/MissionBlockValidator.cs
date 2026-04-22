@@ -205,6 +205,31 @@ internal sealed class MissionBlockValidator
                     $"field `mission.steps[{i}].objectives` has {combatCount} combat objectives; " +
                     $"at most one of ClearPoi or KillEnemies per step");
 
+            // Within a step, at most one POI-spawning objective. A step
+            // has a single `dynamicPointOfInterest` slot — if two objectives
+            // both spawn a POI, the second overwrites the first and leaves
+            // the first POI orphaned on the system map (no Locate target,
+            // no cleanup on mission complete). Happened live with a
+            // CollectItemTypes(Salvage) + ClearPoi(Marauders) mission that
+            // pointed Locate at the cleared combat zone with no path to
+            // the salvage field. For "defended site" missions the LLM
+            // should use CollectItemTypes with `guards_faction` set
+            // instead (one POI with embedded defenders, vanilla's
+            // SalvageWreck pattern). For "clear zone here, gather
+            // elsewhere" missions the LLM should use two separate steps.
+            bool IsPoiSpawning(LlmObjective o) =>
+                o is LlmClearPoi
+                || (o is LlmCollectItemTypes c
+                    && (c.ItemCategory == "Ore" || c.ItemCategory == "Salvage"));
+            var poiCount = objectives.Count(IsPoiSpawning);
+            if (poiCount > 1)
+                throw new LlmValidationException(
+                    $"field `mission.steps[{i}].objectives` has {poiCount} POI-spawning objectives; " +
+                    $"a step can only track one POI via its Locate button. " +
+                    $"For a defended gather site, use CollectItemTypes with guards_faction set " +
+                    $"instead of a separate ClearPoi; for multi-location missions, split into " +
+                    $"separate steps.");
+
             steps.Add(new LlmMissionStep(objectives));
         }
         return steps;
@@ -233,7 +258,7 @@ internal sealed class MissionBlockValidator
             "KillEnemies"      => ParseKillEnemies(obj, path, atWar, reputation),
             "ProtectUnit"      => ParseProtectUnit(obj, path),
             "TriggerObjective" => ParseTriggerObjective(obj, path),
-            "CollectItemTypes" => ParseCollectItemTypes(obj, path),
+            "CollectItemTypes" => ParseCollectItemTypes(obj, path, atWar, reputation),
             "ClearPoi"         => ParseClearPoi(obj, path, atWar, reputation),
             _                  => throw new LlmValidationException(
                                       $"unreachable: whitelist passed but switch missed \"{type}\""),
@@ -303,9 +328,15 @@ internal sealed class MissionBlockValidator
         return new LlmTriggerObjective(trigger, required, desc);
     }
 
-    private LlmObjective ParseCollectItemTypes(JObject obj, string path)
+    private LlmObjective ParseCollectItemTypes(
+        JObject obj, string path,
+        IReadOnlyList<string> atWar,
+        IReadOnlyDictionary<string, int> reputation)
     {
-        RequireStrictKeys(obj, path, "type", "item_category", "required_amount", "description");
+        RequireKeys(obj, path,
+            required: new[] { "type", "item_category", "required_amount", "description" },
+            optional: new[] { "guards_faction" });
+
         var catTok = obj["item_category"]!;
         if (catTok.Type != JTokenType.String)
             throw new LlmValidationException($"field `{path}.item_category` must be a string");
@@ -315,7 +346,43 @@ internal sealed class MissionBlockValidator
                 $"field `{path}.item_category` must be a whitelisted category, got \"{cat}\"");
         var required = ReadInt(obj, $"{path}.required_amount", CollectRequiredMin, CollectRequiredMax);
         var desc     = ReadObjectiveDescription(obj, $"{path}.description");
-        return new LlmCollectItemTypes(cat, required, desc);
+
+        string? guardsFaction = null;
+        if (obj.ContainsKey("guards_faction"))
+        {
+            // Only Ore and Salvage spawn POIs the guards can attach to.
+            // RefinedProduct / TradeGoods are acquired via refineries /
+            // traders (no location to spawn on) — rejecting guards_faction
+            // here keeps the factory's POI path simple.
+            if (cat != "Ore" && cat != "Salvage")
+                throw new LlmValidationException(
+                    $"field `{path}.guards_faction` only valid when `item_category` is Ore or Salvage " +
+                    $"(no POI to spawn defenders at for \"{cat}\")");
+
+            var gfTok = obj["guards_faction"]!;
+            if (gfTok.Type != JTokenType.String)
+                throw new LlmValidationException($"field `{path}.guards_faction` must be a string");
+            var gf = gfTok.Value<string>() ?? string.Empty;
+            if (!FactionWhitelist.Contains(gf))
+                throw new LlmValidationException(
+                    $"field `{path}.guards_faction` must be a whitelisted faction, got \"{gf}\"");
+
+            // Same hostility rule as KillEnemies / ClearPoi — guards must
+            // be hostile to the player (at war OR rep < -500). Pointing
+            // the LLM at a friendly guild's "defenders" would mean
+            // attacking allies at your own gather site.
+            var isAtWar = atWar != null && atWar.Contains(gf);
+            var rep     = 0;
+            reputation?.TryGetValue(gf, out rep);
+            if (!isAtWar && rep >= -500)
+                throw new LlmValidationException(
+                    $"field `{path}.guards_faction` is not hostile to player " +
+                    $"(rep={rep}, at_war=false); refusing defended-gather mission");
+
+            guardsFaction = gf;
+        }
+
+        return new LlmCollectItemTypes(cat, required, desc, guardsFaction);
     }
 
     private LlmObjective ParseClearPoi(
@@ -451,6 +518,24 @@ internal sealed class MissionBlockValidator
                 throw new LlmValidationException(
                     $"unexpected field `{path}.{prop.Name}`");
         foreach (var key in allowed)
+            if (!obj.ContainsKey(key))
+                throw new LlmValidationException($"missing field `{path}.{key}`");
+    }
+
+    /// <summary>Variant of <see cref="RequireStrictKeys"/> for objects with
+    /// a mix of required and optional fields. Required keys must be present;
+    /// optional keys may be present. Any other key is rejected.</summary>
+    private static void RequireKeys(
+        JObject obj, string path, string[] required, string[] optional)
+    {
+        var allowed = new HashSet<string>(required);
+        foreach (var opt in optional)
+            allowed.Add(opt);
+        foreach (var prop in obj.Properties())
+            if (!allowed.Contains(prop.Name))
+                throw new LlmValidationException(
+                    $"unexpected field `{path}.{prop.Name}`");
+        foreach (var key in required)
             if (!obj.ContainsKey(key))
                 throw new LlmValidationException($"missing field `{path}.{key}`");
     }

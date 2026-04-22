@@ -128,7 +128,14 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(SaveWritePatch));
         _harmony.PatchAll(typeof(SaveLoadPatch));
         _harmony.PatchAll(typeof(MissionLookupPatch));
-        _harmony.PatchAll(typeof(MissionLifecyclePatches));
+        // MissionLifecyclePatches has no [HarmonyPatch] on the outer type —
+        // the four nested classes carry the annotations. Harmony.PatchAll(Type)
+        // does NOT traverse nested types, so passing the outer type silently
+        // attaches zero patches. Patch each nested type directly.
+        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnAcceptPatch));
+        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnCompletePatch));
+        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnFailPatch));
+        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnArchivePatch));
 
         // Wire persistence singletons into Harmony patches (all four use the
         // same PersistedBrokerRegistry + SidecarIO instances).
