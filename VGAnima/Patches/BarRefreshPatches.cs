@@ -401,7 +401,7 @@ internal static class BarRefreshPatches
         }
 
         var contextJson = JsonConvert.SerializeObject(context);
-        var systemPrompt = BuildSystemPrompt();
+        var systemPrompt = BuildSystemPrompt(Plugin.Instance.Cfg.StageDirectionLevel.Value);
         var userPrompt = BuildUserPrompt(contextJson, brokerInfo, station);
 
         Plugin.Log.LogDebug(
@@ -650,10 +650,10 @@ internal static class BarRefreshPatches
     // internal (not private) so VGAnima.Tests can snapshot the live prompt
     // for offline LLM evaluation harnesses. No runtime caller outside this
     // file.
-    internal static string BuildSystemPrompt()
+    internal static string BuildSystemPrompt(int stageDirectionLevel = 0)
     {
         // v2-mission system prompt per spec §8.
-        return
+        var basePrompt =
             "You are a writer for bar-broker NPCs in a space-trading game. Your job is to\n" +
             "produce ONE dialogue-and-mission JSON object the broker will offer the player.\n\n" +
             "You ONLY output valid JSON matching this schema - no preamble, no markdown fences:\n\n" +
@@ -827,8 +827,48 @@ internal static class BarRefreshPatches
             "      below 150. Vanilla's procedural floor is 200; going lower feels like an insult.\n" +
             "  STEP COUNT IS NARRATIVE STRUCTURE, NOT A REWARD MULTIPLIER. Vanilla's\n" +
             "  single-step and multi-step missions pay the same when the objective\n" +
-            "  archetype matches — pick base_value by archetype, not by step count.\n\n" +
-            "Reply with ONLY the JSON object.";
+            "  archetype matches — pick base_value by archetype, not by step count.\n";
+
+        // Opt-in stage-direction flavor. Default (level 0) appends nothing so
+        // the prompt is byte-identical to the pre-feature baseline — no risk
+        // of regressing existing behavior for users who don't enable it.
+        // Level 1 (sparse) and level 2 (rich) append differently-worded rules
+        // that instruct the LLM to include bracketed physical actions in
+        // dialogue, e.g. "[Spits on the floor] The Corsairs are circling."
+        return basePrompt + BuildStageDirectionRule(stageDirectionLevel) +
+               "\nReply with ONLY the JSON object.";
+    }
+
+    /// <summary>Returns the stage-direction instruction block for the given
+    /// intensity level (0 = off, 1 = sparse, 2 = rich). Clamps unknown values
+    /// to the nearest supported level: &lt;=0 → off, &gt;=2 → rich.</summary>
+    internal static string BuildStageDirectionRule(int level)
+    {
+        if (level <= 0) return string.Empty;
+
+        var frequency = level >= 2
+            ? "MOST dialogue lines across the pitch, check_in, and payout " +
+              "should include one"
+            : "1-2 dialogue lines total across the pitch, check_in, and " +
+              "payout should include one (use sparingly — most lines stay " +
+              "plain dialogue)";
+
+        return
+            "- STAGE DIRECTIONS: bracketed physical actions that imply the\n" +
+            "  broker's presence, emotion, or physical state. " + frequency + ":\n" +
+            "    Examples: \"[Spits on the floor] The Corsairs are circling.\"\n" +
+            "              \"[Glances at the door] Keep this between us.\"\n" +
+            "              \"[Wipes blood from his lip] Yeah, I won't ask.\"\n" +
+            "  Rules:\n" +
+            "    * Use square brackets, not parentheses or asterisks.\n" +
+            "    * Keep each direction short (<=30 chars including brackets).\n" +
+            "    * Physical / observable only — no thoughts, no narration.\n" +
+            "    * ASCII only, same as the rest of the dialogue.\n" +
+            "    * The bracketed text COUNTS against the line's 108-char\n" +
+            "      limit — budget accordingly.\n" +
+            "    * Place at the start of a line when it sets up the spoken\n" +
+            "      words; at the end when it reacts to them. Do not embed\n" +
+            "      mid-sentence.\n";
     }
 
     private static string BuildUserPrompt(string contextJson, BrokerInfo brokerInfo, SpaceStation station)

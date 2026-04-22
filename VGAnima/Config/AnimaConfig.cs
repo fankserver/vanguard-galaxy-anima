@@ -10,14 +10,16 @@ internal sealed class AnimaConfig
     public ConfigEntry<bool>   Enabled           { get; }
     public ConfigEntry<float>  MissionChance     { get; }
 
-    public ConfigEntry<bool>   LlmEnabled        { get; }
-    public ConfigEntry<string> LlmBaseUrl        { get; }
-    public ConfigEntry<string> LlmModel          { get; }
-    public ConfigEntry<int>    LlmTimeoutSeconds { get; }
-    public ConfigEntry<string> LlmApiKey         { get; }
-    public ConfigEntry<bool>   LlmEnableThinking { get; }
-    public ConfigEntry<int>    LlmMaxTokens      { get; }
-    public ConfigEntry<float>  LlmTemperature    { get; }
+    public ConfigEntry<bool>   LlmEnabled           { get; }
+    public ConfigEntry<string> LlmBaseUrl           { get; }
+    public ConfigEntry<string> LlmModel             { get; }
+    public ConfigEntry<int>    LlmTimeoutSeconds    { get; }
+    public ConfigEntry<string> LlmApiKey            { get; }
+    public ConfigEntry<bool>   LlmEnableThinking    { get; }
+    public ConfigEntry<int>    LlmMaxTokens         { get; }
+    public ConfigEntry<float>  LlmTemperature       { get; }
+
+    public ConfigEntry<int>    StageDirectionLevel  { get; }
 
     public AnimaConfig(ConfigFile cf)
     {
@@ -44,5 +46,13 @@ internal sealed class AnimaConfig
             "Token ceiling on the completion. 1200 comfortably covers the v1 dialogue schema.");
         LlmTemperature = cf.Bind("Llm", "Temperature", 0.8f,
             "Sampling temperature for the completion. Higher = more varied, lower = more deterministic.");
+
+        StageDirectionLevel = cf.Bind("Style", "StageDirectionLevel", 0,
+            "Level of bracketed stage directions in broker dialogue (e.g. '[Spits " +
+            "on floor]' / '[Glances at the door]'). 0 = off (default, plain " +
+            "dialogue only); 1 = sparse (1-2 across the whole pitch/check_in/" +
+            "payout); 2 = rich (most lines include one). Heads-up: TTS will " +
+            "read the bracketed text aloud unless the TTS plugin filters it, " +
+            "so keep this at 0 until you've verified your voice setup.");
     }
 }
