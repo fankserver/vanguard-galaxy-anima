@@ -20,6 +20,7 @@ internal sealed class AnimaConfig
     public ConfigEntry<float>  LlmTemperature       { get; }
 
     public ConfigEntry<int>    StageDirectionLevel  { get; }
+    public ConfigEntry<bool>   IncludePlayerJournal { get; }
 
     public AnimaConfig(ConfigFile cf)
     {
@@ -46,6 +47,14 @@ internal sealed class AnimaConfig
             "Token ceiling on the completion. 1200 comfortably covers the v1 dialogue schema.");
         LlmTemperature = cf.Bind("Llm", "Temperature", 0.8f,
             "Sampling temperature for the completion. Higher = more varied, lower = more deterministic.");
+
+        IncludePlayerJournal = cf.Bind("Style", "IncludePlayerJournal", true,
+            "Feed the broker a filtered view of past broker-mission outcomes so " +
+            "they can reference player history organically (\"you've been hunting " +
+            "Corsairs here lately\", \"the Steel Vultures appreciate your work\"). " +
+            "Three windows per broker — local (same station), factional (same " +
+            "faction elsewhere), and notable (high-magnitude events galaxy-wide). " +
+            "Set to false to fall back to stateless brokers.");
 
         StageDirectionLevel = cf.Bind("Style", "StageDirectionLevel", 0,
             "Level of bracketed stage directions in broker dialogue (e.g. '[Spits " +

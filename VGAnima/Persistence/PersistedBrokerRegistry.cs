@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace VGAnima.Persistence;
 
@@ -15,19 +16,44 @@ namespace VGAnima.Persistence;
 /// seed from the secondary index before indexing the new one.</para></summary>
 internal sealed class PersistedBrokerRegistry
 {
+    /// <summary>Upper bound on the completed-mission log size. Older entries
+    /// drop off FIFO once this cap is reached. ~50 gives several in-game
+    /// weeks of history at realistic mission cadence, enough for the
+    /// journal context windows to always have material without unbounded
+    /// sidecar growth.</summary>
+    public const int MaxCompletedMissions = 50;
+
     private readonly Dictionary<string, PersistedEntry> _byStoryId = new();
     private readonly Dictionary<string, string>         _storyIdBySeed = new();
+    // Rolling log of resolved (completed / failed / abandoned) missions,
+    // ordered oldest-first. Capped at MaxCompletedMissions.
+    private readonly List<CompletedMissionRecord>       _completedLog = new();
 
     public void Clear()
     {
         _byStoryId.Clear();
         _storyIdBySeed.Clear();
+        _completedLog.Clear();
     }
 
     public void LoadFrom(IEnumerable<PersistedEntry> entries)
     {
         Clear();
         foreach (var e in entries) Add(e);
+    }
+
+    /// <summary>Replaces the completed-mission log wholesale. Called by
+    /// <see cref="SaveLoadPatch"/> after deserializing a sidecar. Trims to
+    /// the cap if the input exceeds it (paranoia — a sidecar hand-edited
+    /// beyond the cap shouldn't break downstream callers).</summary>
+    public void LoadCompletedMissions(IEnumerable<CompletedMissionRecord>? records)
+    {
+        _completedLog.Clear();
+        if (records == null) return;
+        var materialized = records.ToList();
+        var skip = System.Math.Max(0, materialized.Count - MaxCompletedMissions);
+        for (var i = skip; i < materialized.Count; i++)
+            _completedLog.Add(materialized[i]);
     }
 
     public void Add(PersistedEntry entry)
@@ -72,4 +98,21 @@ internal sealed class PersistedBrokerRegistry
             },
         };
     }
+
+    /// <summary>Appends a resolved-mission summary to the completed-mission
+    /// log, trimming the oldest entry when the cap is exceeded. Caller
+    /// remains responsible for subsequently removing the corresponding
+    /// <see cref="PersistedEntry"/> via <see cref="Remove"/> — the two
+    /// stores are distinct lifecycles (in-flight vs historical).</summary>
+    public void RecordCompletion(CompletedMissionRecord record)
+    {
+        _completedLog.Add(record);
+        if (_completedLog.Count > MaxCompletedMissions)
+            _completedLog.RemoveAt(0);
+    }
+
+    /// <summary>Ordered oldest-first. The context builder reverses per
+    /// window as needed (recent-first is more natural for "last N events"
+    /// slicing).</summary>
+    public IReadOnlyList<CompletedMissionRecord> CompletedMissions => _completedLog;
 }

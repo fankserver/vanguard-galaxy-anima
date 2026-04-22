@@ -15,7 +15,13 @@ namespace VGAnima.Persistence;
 /// schema's public shape.</para></summary>
 internal sealed record SidecarSchema(
     [property: JsonProperty("version")] int Version,
-    [property: JsonProperty("entries")] PersistedEntry[] Entries)
+    [property: JsonProperty("entries")] PersistedEntry[] Entries,
+    // Additive v1 field — nullable + default-null means v1 sidecars
+    // written before the journal landed deserialize unchanged (the
+    // reader treats a missing `completed_missions` field as an empty
+    // history). Schema version stays at 1; old installs keep loading.
+    [property: JsonProperty("completed_missions", NullValueHandling = NullValueHandling.Ignore)]
+    CompletedMissionRecord[]? CompletedMissions = null)
 {
     public const int CurrentVersion = 1;
 

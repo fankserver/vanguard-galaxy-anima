@@ -17,7 +17,17 @@ namespace VGAnima.Llm;
 /// Deterministic, side-effect-free, safe to call from the Unity main thread.</summary>
 internal sealed class ContextGatherer
 {
-    public LlmContext Gather(IGameStateView view, BrokerInfo broker)
+    /// <summary>Builds the LLM context for a given game state + broker.
+    /// Optionally includes a per-broker <see cref="LlmJournalSection"/>
+    /// when the caller supplies one — pre-built by
+    /// <see cref="JournalContextBuilder"/> against the current
+    /// <c>PersistedBrokerRegistry</c>. Passing <c>null</c> omits the
+    /// <c>journal</c> key from the context JSON entirely (the LlmContext
+    /// field uses NullValueHandling.Ignore).</summary>
+    public LlmContext Gather(
+        IGameStateView view,
+        BrokerInfo broker,
+        LlmJournalSection? journal = null)
     {
         var ctx = new LlmContext
         {
@@ -86,6 +96,7 @@ internal sealed class ContextGatherer
                 Seed           = broker.Seed,
                 StationFaction = broker.StationFaction,
             },
+            Journal = journal,
         };
         // Final pass: derive mission guidance from the fully-populated context.
         // Must run last — reads every section.

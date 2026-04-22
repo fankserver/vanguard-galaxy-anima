@@ -149,6 +149,7 @@ public class Plugin : BaseUnityPlugin
 
         MissionLookupPatch.Registry      = PersistedRegistry;
         MissionLifecyclePatches.Registry = PersistedRegistry;
+        MissionLifecyclePatches.Clock    = Clock;
 
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
@@ -185,10 +186,12 @@ public class Plugin : BaseUnityPlugin
         {
             var sidecarPath = SidecarPathResolver.From(path);
             var entries     = System.Linq.Enumerable.ToArray(PersistedRegistry.All());
+            var completed   = System.Linq.Enumerable.ToArray(PersistedRegistry.CompletedMissions);
             SidecarIO.Write(sidecarPath, new SidecarSchema(
-                Version: SidecarSchema.CurrentVersion,
-                Entries: entries));
-            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} to {sidecarPath}");
+                Version:           SidecarSchema.CurrentVersion,
+                Entries:           entries,
+                CompletedMissions: completed.Length == 0 ? null : completed));
+            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {completed.Length} completed to {sidecarPath}");
         }
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
     }

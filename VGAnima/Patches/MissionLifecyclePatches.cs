@@ -2,6 +2,7 @@ using System;
 using HarmonyLib;
 using Source.MissionSystem;
 using Source.Player;
+using VGAnima.Missions;
 using VGAnima.Persistence;
 
 namespace VGAnima.Patches;
@@ -34,9 +35,50 @@ internal static class MissionLifecyclePatches
     /// is fully wired; every postfix treats null as "no-op".</summary>
     public static PersistedBrokerRegistry? Registry;
 
+    /// <summary>Clock used to timestamp completed-mission records. Plugin.Awake
+    /// wires this after construction. Null in tests / pre-init.</summary>
+    public static IClock? Clock;
+
     private static bool IsAuthored(string? storyId) =>
         !string.IsNullOrEmpty(storyId)
         && storyId.StartsWith(LlmStoryIdPrefix, StringComparison.Ordinal);
+
+    /// <summary>Shared recorder: reads the current PersistedEntry, builds a
+    /// <see cref="CompletedMissionRecord"/> with the given outcome, appends
+    /// it to the registry's rolling log, then removes the live entry. No-ops
+    /// if the entry is already gone (e.g. archive firing after complete).
+    /// Missing display-name snapshots fall back to storyId-derived strings
+    /// so journal rendering never shows a null.</summary>
+    private static void RecordAndRemove(string storyId, string outcome, int missionLevel)
+    {
+        if (Registry is null) return;
+        var entry = Registry.Get(storyId);
+        if (entry is null) return;   // already resolved
+
+        var block      = entry.MissionBlock;
+        var archetype  = ArchetypeInferrer.Infer(block);
+        var magnitude  = MagnitudeScorer.Score(block, archetype, outcome, missionLevel);
+        var gameSec    = Clock?.GameSeconds ?? 0;
+        var utcIso     = (Clock?.UtcNow ?? DateTime.UtcNow).ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+        Registry.RecordCompletion(new CompletedMissionRecord(
+            StoryId:             storyId,
+            BrokerName:          entry.Broker.NameSnapshot        ?? "a broker",
+            StationId:           entry.Broker.StationId,
+            StationName:         entry.Broker.StationNameSnapshot ?? "a station",
+            SourceFaction:       block.SourceFaction,
+            MissionName:         block.Name,
+            Archetype:           archetype,
+            Outcome:             outcome,
+            MissionLevel:        missionLevel,
+            SystemName:          entry.Broker.SystemNameSnapshot  ?? string.Empty,
+            MagnitudeScore:      magnitude,
+            ResolvedGameSeconds: gameSec,
+            ResolvedRealUtc:     utcIso));
+        Registry.Remove(storyId);
+        Plugin.Log.LogDebug(
+            $"Journal: recorded {outcome} '{block.Name}' (archetype={archetype}, mag={magnitude})");
+    }
 
     /// <summary>Postfix on <see cref="GamePlayer.AddMissionWithLog(Mission)"/>
     /// — the <c>Mission</c> overload. The <c>string</c> overload delegates
@@ -81,8 +123,8 @@ internal static class MissionLifecyclePatches
             var id = m?.storyId;
             Plugin.Log.LogDebug($"OnCompletePatch fired (storyId={id ?? "<null>"})");
             if (!IsAuthored(id)) return;
-            Registry?.Remove(id!);
-            Plugin.Log.LogDebug($"OnCompletePatch: removed storyId={id}");
+            RecordAndRemove(id!, CompletedMissionOutcomes.Completed, m?.level ?? 0);
+            Plugin.Log.LogDebug($"OnCompletePatch: recorded + removed storyId={id}");
         }
 #pragma warning restore Harmony003
     }
@@ -100,8 +142,8 @@ internal static class MissionLifecyclePatches
             var id = __instance?.storyId;
             Plugin.Log.LogDebug($"OnFailPatch fired (storyId={id ?? "<null>"})");
             if (!IsAuthored(id)) return;
-            Registry?.Remove(id!);
-            Plugin.Log.LogDebug($"OnFailPatch: removed storyId={id}");
+            RecordAndRemove(id!, CompletedMissionOutcomes.Failed, __instance?.level ?? 0);
+            Plugin.Log.LogDebug($"OnFailPatch: recorded + removed storyId={id}");
         }
 #pragma warning restore Harmony003
     }
@@ -118,8 +160,12 @@ internal static class MissionLifecyclePatches
         {
             Plugin.Log.LogDebug($"OnArchivePatch fired (storyId={id ?? "<null>"})");
             if (!IsAuthored(id)) return;
-            Registry?.Remove(id!);
-            Plugin.Log.LogDebug($"OnArchivePatch: removed storyId={id}");
+            // If OnComplete or OnFail already recorded + removed this entry,
+            // RecordAndRemove is a no-op. Archive is the catch-all for
+            // "abandoned" — only reaches RecordCompletion when no prior
+            // terminal event fired.
+            RecordAndRemove(id!, CompletedMissionOutcomes.Abandoned, missionLevel: 0);
+            Plugin.Log.LogDebug($"OnArchivePatch: recorded + removed storyId={id}");
         }
     }
 }

@@ -82,8 +82,15 @@ internal static class SaveLoadPatch
             {
                 case SidecarReadStatus.Loaded:
                     Registry.LoadFrom(result.Schema!.Entries);
+                    // Completed-missions field is nullable (additive v1
+                    // addition) — pre-journal sidecars deserialize with
+                    // null, which LoadCompletedMissions treats as "empty
+                    // log." Both shapes produce the same outcome.
+                    Registry.LoadCompletedMissions(result.Schema.CompletedMissions);
+                    var completedCount = result.Schema.CompletedMissions?.Length ?? 0;
                     Log?.LogInfo(
-                        $"Loaded {result.Schema.Entries.Length} broker entr{(result.Schema.Entries.Length == 1 ? "y" : "ies")} from {sidecarPath}");
+                        $"Loaded {result.Schema.Entries.Length} broker entr{(result.Schema.Entries.Length == 1 ? "y" : "ies")} + " +
+                        $"{completedCount} completed from {sidecarPath}");
                     break;
                 case SidecarReadStatus.MissingFile:
                     Log?.LogInfo($"No sidecar at {sidecarPath} — starting with empty registry");

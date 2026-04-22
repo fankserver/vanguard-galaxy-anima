@@ -391,7 +391,19 @@ internal static class BarRefreshPatches
         LlmContext context;
         try
         {
-            context = plugin.Gatherer.Gather(plugin.GameStateView, brokerInfo);
+            // Journal section is built per-broker from the registry's
+            // completed-mission log. Toggled by Style.IncludePlayerJournal;
+            // when off we pass null and the LlmContext omits the field.
+            // See JournalContextBuilder for the three-window filter logic.
+            LlmJournalSection? journal = null;
+            if (plugin.Cfg.IncludePlayerJournal.Value && plugin.PersistedRegistry != null)
+            {
+                journal = JournalContextBuilder.Build(
+                    plugin.PersistedRegistry.CompletedMissions,
+                    stationId:         station.guid,
+                    factionIdentifier: brokerInfo.StationFaction);
+            }
+            context = plugin.Gatherer.Gather(plugin.GameStateView, brokerInfo, journal);
         }
         catch (Exception ex)
         {
@@ -568,7 +580,9 @@ internal static class BarRefreshPatches
                     var missionLevel = station.level;
                     storyId = plugin.MissionAssigner.Assign(
                         story.Mission, missionLevel, station, candidateSeed,
-                        brokerStory: story);
+                        brokerStory: story,
+                        brokerName:  newPatron.name,
+                        systemName:  station.system?.name);
                     Plugin.Log.LogInfo(
                         $"LLM-authored mission '{story.Mission.Name}' registered " +
                         $"with storyId={storyId} (missionLevel={missionLevel})");

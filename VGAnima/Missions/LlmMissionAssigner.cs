@@ -90,9 +90,16 @@ internal sealed class LlmMissionAssigner
         int missionLevel,
         SpaceStation? brokerStation,
         string brokerSeed,
-        LlmStory brokerStory)
+        LlmStory brokerStory,
+        // Display-string snapshots saved onto the PersistedBroker so the
+        // journal can build human-readable "last mission" references after
+        // the broker is gone from the world. Nullable for back-compat
+        // with callers that don't have the names handy (tests).
+        string? brokerName  = null,
+        string? systemName  = null)
     {
-        return AssignCore(block, missionLevel, brokerStation, brokerSeed, brokerStory);
+        return AssignCore(block, missionLevel, brokerStation, brokerSeed, brokerStory,
+                          brokerName, systemName);
     }
 
     private string AssignCore(
@@ -100,7 +107,9 @@ internal sealed class LlmMissionAssigner
         int missionLevel,
         SpaceStation? brokerStation,
         string brokerSeed,
-        LlmStory? brokerStory)
+        LlmStory? brokerStory,
+        string? brokerName = null,
+        string? systemName = null)
     {
         var mission = MissionFactoryFromJson.Build(
             block, missionLevel, brokerStation, brokerSeed);
@@ -127,7 +136,10 @@ internal sealed class LlmMissionAssigner
                 Broker: new PersistedBroker(
                     Seed: brokerSeed,
                     StationId: stationId,
-                    Story: brokerStory),
+                    Story: brokerStory,
+                    NameSnapshot:        brokerName,
+                    StationNameSnapshot: brokerStation?.name,
+                    SystemNameSnapshot:  systemName ?? brokerStation?.system?.name),
                 Timestamps: new PersistedTimestamps(
                     CreatedGameSeconds:  gameSec,
                     CreatedRealUtc:      utcIso,

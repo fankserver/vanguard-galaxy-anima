@@ -36,6 +36,12 @@ internal sealed class LlmContext
     /// <see cref="MissionGuidanceBuilder"/> for the weighting rules.</summary>
     [JsonProperty("mission_guidance")] public LlmMissionGuidance MissionGuidance { get; set; } = null!;
     [JsonProperty("missions")]     public LlmMissionsSection Missions     { get; set; } = null!;
+    /// <summary>Per-broker filtered view of the VGAnima journal — what THIS
+    /// broker plausibly knows about the player's past broker work. Omitted
+    /// entirely (null) when <c>Style.IncludePlayerJournal = false</c> or
+    /// when the registry is empty. See <see cref="JournalContextBuilder"/>.</summary>
+    [JsonProperty("journal", NullValueHandling = NullValueHandling.Ignore)]
+    public LlmJournalSection? Journal { get; set; }
     [JsonProperty("story_arcs_active")] public IReadOnlyList<string> StoryArcsActive { get; set; } = null!;
     [JsonProperty("waypoints")]    public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = null!;
     [JsonProperty("time")]         public LlmTimeSection     Time         { get; set; } = null!;
@@ -175,3 +181,31 @@ internal sealed record BrokerInfo(
     bool IsMale,
     string Seed,
     string StationFaction);
+
+/// <summary>Per-broker journal view. Three windows — local / factional /
+/// notable — built by <see cref="JournalContextBuilder"/>. Each entry is a
+/// compact snapshot of a resolved VGAnima mission. The LLM reads these as
+/// narrative anchors ("you've been salvaging here lately", "the Steel
+/// Vultures have been talking about your work").</summary>
+internal sealed class LlmJournalSection
+{
+    /// <summary>Recent events at THIS station. Bar-gossip level of detail.</summary>
+    [JsonProperty("local")]     public IReadOnlyList<LlmJournalEntry> Local     { get; set; } = null!;
+    /// <summary>Recent events involving the SAME faction elsewhere. Intel-
+    /// network level; the broker heard through channels.</summary>
+    [JsonProperty("factional")] public IReadOnlyList<LlmJournalEntry> Factional { get; set; } = null!;
+    /// <summary>High-magnitude events regardless of location. Famous deeds
+    /// travel everywhere.</summary>
+    [JsonProperty("notable")]   public IReadOnlyList<LlmJournalEntry> Notable   { get; set; } = null!;
+}
+
+internal sealed record LlmJournalEntry(
+    [property: JsonProperty("storyId")]              string StoryId,
+    [property: JsonProperty("mission_name")]         string MissionName,
+    [property: JsonProperty("archetype")]            string Archetype,
+    [property: JsonProperty("outcome")]              string Outcome,
+    [property: JsonProperty("source_faction")]       string SourceFaction,
+    [property: JsonProperty("station_name")]         string StationName,
+    [property: JsonProperty("system_name")]          string SystemName,
+    [property: JsonProperty("resolved_game_seconds")] double ResolvedGameSeconds,
+    [property: JsonProperty("magnitude")]            int    Magnitude);
