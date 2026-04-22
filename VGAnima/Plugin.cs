@@ -128,6 +128,10 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(SaveWritePatch));
         _harmony.PatchAll(typeof(SaveLoadPatch));
         _harmony.PatchAll(typeof(MissionLookupPatch));
+        // BarPurchasePatches uses nested-type Harmony annotations, same
+        // gotcha as MissionLifecyclePatches — patch the nested type
+        // directly so PatchAll actually attaches.
+        _harmony.PatchAll(typeof(BarPurchasePatches.OnButtonPurchase));
         // MissionLifecyclePatches has no [HarmonyPatch] on the outer type —
         // the four nested classes carry the annotations. Harmony.PatchAll(Type)
         // does NOT traverse nested types, so passing the outer type silently

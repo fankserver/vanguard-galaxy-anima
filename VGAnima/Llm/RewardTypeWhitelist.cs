@@ -10,6 +10,11 @@ internal static class RewardTypeWhitelist
         "Credits",
         "Experience",
         "Reputation",
+        // v1-item-rewards: LLM can emit tangible-item payouts using
+        // vanilla's Rewards.Item pipeline. Item kind lives in the
+        // reward object's `kind` field and is narrowly whitelisted —
+        // see ItemRewardKindWhitelist.
+        "Item",
     };
 
     public static IReadOnlyCollection<string> All => Names;

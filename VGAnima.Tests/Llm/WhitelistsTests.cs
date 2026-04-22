@@ -133,27 +133,55 @@ public class WhitelistsTests
 
     // -------- RewardType --------
     [Fact]
-    public void RewardTypeWhitelist_HasExactlyThreeEntries()
+    public void RewardTypeWhitelist_HasExactlyFourEntries()
     {
-        Assert.Equal(3, RewardTypeWhitelist.All.Count);
+        // v1-item-rewards bumped this from 3 to 4 — Item was added.
+        Assert.Equal(4, RewardTypeWhitelist.All.Count);
     }
 
     [Theory]
     [InlineData("Credits")]
     [InlineData("Experience")]
     [InlineData("Reputation")]
+    [InlineData("Item")]
     public void RewardTypeWhitelist_Contains_Allowed(string type)
     {
         Assert.True(RewardTypeWhitelist.Contains(type));
     }
 
     [Theory]
-    [InlineData("Item")]
     [InlineData("Skillpoint")]
     [InlineData("StoryMission")]
+    [InlineData("WorkshopCredit")]
     [InlineData("")]
     public void RewardTypeWhitelist_Rejects_Others(string type)
     {
         Assert.False(RewardTypeWhitelist.Contains(type));
+    }
+
+    // -------- ItemRewardKind --------
+    [Fact]
+    public void ItemRewardKindWhitelist_HasExactlyThreeEntries()
+    {
+        Assert.Equal(3, ItemRewardKindWhitelist.All.Count);
+    }
+
+    [Theory]
+    [InlineData("MiningClaim")]
+    [InlineData("SalvageClaim")]
+    [InlineData("MaterialMiningClaim")]
+    public void ItemRewardKindWhitelist_Contains_Allowed(string kind)
+    {
+        Assert.True(ItemRewardKindWhitelist.Contains(kind));
+    }
+
+    [Theory]
+    [InlineData("Blueprint")]
+    [InlineData("Ship")]
+    [InlineData("Crew")]
+    [InlineData("")]
+    public void ItemRewardKindWhitelist_Rejects_Others(string kind)
+    {
+        Assert.False(ItemRewardKindWhitelist.Contains(kind));
     }
 }

@@ -27,7 +27,9 @@ internal sealed class ContextGatherer
     public LlmContext Gather(
         IGameStateView view,
         BrokerInfo broker,
-        LlmJournalSection? journal = null)
+        LlmJournalSection? journal = null,
+        LlmBarEcosystemSection? barEcosystem = null,
+        LlmPurchaseProfileSection? purchaseProfile = null)
     {
         var ctx = new LlmContext
         {
@@ -96,7 +98,14 @@ internal sealed class ContextGatherer
                 Seed           = broker.Seed,
                 StationFaction = broker.StationFaction,
             },
-            Journal = journal,
+            Journal      = journal,
+            // Null-unless-populated: LlmContext.BarEcosystem carries
+            // NullValueHandling.Ignore so an empty bar (no salesmen,
+            // or callers that don't pass it) produces no field in the
+            // serialized JSON.
+            BarEcosystem = (barEcosystem is { OtherSalesmenHere: { Count: > 0 } })
+                            ? barEcosystem : null,
+            PurchaseProfile = purchaseProfile,
         };
         // Final pass: derive mission guidance from the fully-populated context.
         // Must run last — reads every section.

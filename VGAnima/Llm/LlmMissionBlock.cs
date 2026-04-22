@@ -73,3 +73,18 @@ internal sealed record LlmCreditsReward(int BaseValue) : LlmReward;
 internal sealed record LlmExperienceReward(int BaseValue) : LlmReward;
 
 internal sealed record LlmReputationReward(string Faction, int Amount) : LlmReward;
+
+/// <summary>Item reward — the broker hands over a tangible item on
+/// completion. v1 supports three item kinds, all anchored to the broker
+/// station's system at mission-build time:
+///   - <c>MiningClaim</c> — procedural asteroid field claim (cashable
+///     OR equippable by prospector-oriented players).
+///   - <c>SalvageClaim</c> — procedural derelict-field claim.
+///   - <c>MaterialMiningClaim</c> — mining claim weighted toward a specific
+///     refined material; richer narrative flavor.
+/// Constructed via <c>ItemBuilder.Get(kind).CreateX(brokerStation.system)</c>
+/// at mission-build time. Factory emits vanilla's
+/// <c>Source.MissionSystem.Rewards.Item</c> which on completion calls
+/// <c>AddCargo(item, amount, force: true)</c> — no validator / inventory
+/// limits to worry about.</summary>
+internal sealed record LlmItemReward(string Kind) : LlmReward;

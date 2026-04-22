@@ -1,4 +1,6 @@
 using System;
+using Behaviour.Item;
+using Behaviour.Item.Builder;
 using Source.Galaxy;
 using Source.Galaxy.POI;
 using Source.Item;
@@ -14,6 +16,9 @@ using StoryMissionRegistry = Source.MissionSystem.StoryMission;
 // `Source.MissionSystem.Rewards` define a type by that name. Alias the
 // reward variant (the one we construct below).
 using ReputationReward = Source.MissionSystem.Rewards.Reputation;
+// `Item` is ambiguous — there's a `Source.MissionSystem.Objectives.Item`
+// AND a `Source.MissionSystem.Rewards.Item`. Alias the reward variant.
+using ItemReward = Source.MissionSystem.Rewards.Item;
 
 namespace VGAnima.Missions;
 
@@ -83,7 +88,11 @@ internal static class MissionFactoryFromJson
 
         foreach (var rewardBlock in block.Rewards)
         {
-            var reward = BuildReward(rewardBlock, missionLevel);
+            var reward = BuildReward(rewardBlock, missionLevel, brokerStation);
+            // BuildReward returns null if an item reward couldn't be
+            // constructed (e.g. null station in tests). Skip null instead
+            // of crashing — the rest of the mission stays valid.
+            if (reward is null) continue;
             mission.rewards.Add(reward);
             LogRewardResolution(rewardBlock, reward, missionLevel);
         }
@@ -108,6 +117,9 @@ internal static class MissionFactoryFromJson
                     $"Reward[Experience]: base_value={e.BaseValue} missionLevel={missionLevel} → amount={ex.amount}",
                 LlmReputationReward r when output is ReputationReward rp =>
                     $"Reward[Reputation]: faction={r.Faction} amount={rp.amount} (no scaling)",
+                LlmItemReward i when output is ItemReward ir =>
+                    $"Reward[Item]: kind={i.Kind} → itemIdentifier={ir.item?.itemBuilder?.identifier ?? "?"} " +
+                    $"displayName=\"{ir.item?.displayName ?? "?"}\"",
                 _ => $"Reward[?]: input={input.GetType().Name} output={output.GetType().Name}",
             };
             VGAnima.Plugin.Log?.LogDebug(line);
@@ -311,7 +323,8 @@ internal static class MissionFactoryFromJson
         };
     }
 
-    private static MissionReward BuildReward(LlmReward block, int missionLevel)
+    private static MissionReward? BuildReward(
+        LlmReward block, int missionLevel, SpaceStation? brokerStation)
     {
         switch (block)
         {
@@ -334,10 +347,41 @@ internal static class MissionFactoryFromJson
                     amount  = r.Amount,
                 };
 
+            case LlmItemReward i:
+                return BuildItemReward(i, brokerStation);
+
             default:
                 throw new InvalidOperationException(
                     $"unknown validated reward type {block.GetType().Name}");
         }
+    }
+
+    /// <summary>Converts an LLM item-reward descriptor into vanilla's
+    /// <see cref="ItemReward"/>. All three v1 kinds anchor to the broker
+    /// station's system — mining claims / salvage claims are
+    /// system-local by construction (they point at asteroid fields or
+    /// derelict fleets in a specific <see cref="SystemMapData"/>).
+    /// Returns null when <paramref name="brokerStation"/> is unavailable
+    /// (unit tests) — caller skips the reward rather than crashing.</summary>
+    private static MissionReward? BuildItemReward(LlmItemReward block, SpaceStation? brokerStation)
+    {
+        var system = brokerStation?.system;
+        if (system == null) return null;
+
+        var builder = ItemBuilder.Get(block.Kind);
+        if (builder == null)
+            throw new InvalidOperationException(
+                $"item-reward builder `{block.Kind}` not found in vanilla ItemBuilder registry");
+
+        InventoryItemType item = block.Kind switch
+        {
+            ItemRewardKindWhitelist.MiningClaim         => builder.CreateMiningClaim(system),
+            ItemRewardKindWhitelist.SalvageClaim        => builder.CreateSalvageClaim(system),
+            ItemRewardKindWhitelist.MaterialMiningClaim => builder.CreateMaterialMiningClaim(system),
+            _ => throw new InvalidOperationException(
+                    $"item-reward kind `{block.Kind}` passed validator but has no factory case"),
+        };
+        return new ItemReward { item = item, amount = 1 };
     }
 
     // Suppress the "unused alias" warning — the using is kept to document

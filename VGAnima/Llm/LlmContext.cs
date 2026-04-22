@@ -42,6 +42,21 @@ internal sealed class LlmContext
     /// when the registry is empty. See <see cref="JournalContextBuilder"/>.</summary>
     [JsonProperty("journal", NullValueHandling = NullValueHandling.Ignore)]
     public LlmJournalSection? Journal { get; set; }
+    /// <summary>Live snapshot of other patrons at this bar — vanilla
+    /// salesmen (Prospector, Salvage Scout, Equipment Rep, etc.) and crew
+    /// recruiters. VGAnima-injected brokers are filtered out. Lets the
+    /// broker reference the rest of the room organically ("see that
+    /// Prospector over there?"). Omitted when empty. See
+    /// <see cref="BarEcosystemBuilder"/>.</summary>
+    [JsonProperty("bar_ecosystem", NullValueHandling = NullValueHandling.Ignore)]
+    public LlmBarEcosystemSection? BarEcosystem { get; set; }
+    /// <summary>Lifetime tallies of the player's bar-salesman purchases,
+    /// written by <see cref="VGAnima.Patches.BarPurchasePatches"/> and
+    /// read by <see cref="PurchaseProfileBuilder"/>. Omitted when the
+    /// player has never bought anything. Feeds the "offer rewards that
+    /// match player taste" loop.</summary>
+    [JsonProperty("purchase_profile", NullValueHandling = NullValueHandling.Ignore)]
+    public LlmPurchaseProfileSection? PurchaseProfile { get; set; }
     [JsonProperty("story_arcs_active")] public IReadOnlyList<string> StoryArcsActive { get; set; } = null!;
     [JsonProperty("waypoints")]    public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = null!;
     [JsonProperty("time")]         public LlmTimeSection     Time         { get; set; } = null!;
@@ -225,3 +240,38 @@ internal sealed record LlmJournalEntry(
     [property: JsonProperty("system_name")]          string SystemName,
     [property: JsonProperty("resolved_game_seconds")] double ResolvedGameSeconds,
     [property: JsonProperty("magnitude")]            int    Magnitude);
+
+/// <summary>Live snapshot of the bar's other patrons — what else is
+/// "for sale" at this station right now, so the broker can reference
+/// the room.</summary>
+internal sealed class LlmBarEcosystemSection
+{
+    [JsonProperty("other_salesmen_here")]
+    public IReadOnlyList<LlmBarSalesmanEntry> OtherSalesmenHere { get; set; } = null!;
+}
+
+/// <summary>Counts of each canonical purchase type the player has made
+/// from bar salesmen across their whole playthrough. Lifetime figures;
+/// zeroes are not emitted (builder returns null in that case).</summary>
+internal sealed class LlmPurchaseProfileSection
+{
+    [JsonProperty("mining_claims_bought")]  public int MiningClaimsBought  { get; set; }
+    [JsonProperty("salvage_claims_bought")] public int SalvageClaimsBought { get; set; }
+    [JsonProperty("space_ship_png_bought")] public int SpaceShipPngBought  { get; set; }
+    [JsonProperty("equipment_bought")]      public int EquipmentBought     { get; set; }
+}
+
+internal sealed record LlmBarSalesmanEntry(
+    // One of: Prospector / Salvage Scout / Slick Entrepreneur /
+    // Equipment Rep / Crew Recruiter. Source of truth:
+    // BarEcosystemBuilder.Kinds.
+    [property: JsonProperty("kind")]             string  Kind,
+    [property: JsonProperty("name")]             string  Name,
+    // Canonical item identifier (MiningClaim / SalvageClaim / SpaceShipPng /
+    // equipment-builder id). Null for Crew Recruiter or unresolvable.
+    [property: JsonProperty("item_identifier",   NullValueHandling = NullValueHandling.Ignore)]
+    string? ItemIdentifier,
+    // Only Equipment Reps carry a faction signal (via their item's
+    // manufacturer). Null for every other kind and for generic brands.
+    [property: JsonProperty("faction",           NullValueHandling = NullValueHandling.Ignore)]
+    string? Faction);

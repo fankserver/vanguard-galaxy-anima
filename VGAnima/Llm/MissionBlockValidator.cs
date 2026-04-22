@@ -491,9 +491,23 @@ internal sealed class MissionBlockValidator
             "Credits"    => ParseCreditsReward(obj, path),
             "Experience" => ParseExperienceReward(obj, path),
             "Reputation" => ParseReputationReward(obj, path),
+            "Item"       => ParseItemReward(obj, path),
             _            => throw new LlmValidationException(
                                 $"unreachable: whitelist passed but switch missed \"{type}\""),
         };
+    }
+
+    private LlmReward ParseItemReward(JObject obj, string path)
+    {
+        RequireStrictKeys(obj, path, "type", "kind");
+        var kindTok = obj["kind"]!;
+        if (kindTok.Type != JTokenType.String)
+            throw new LlmValidationException($"field `{path}.kind` must be a string");
+        var kind = kindTok.Value<string>() ?? string.Empty;
+        if (!ItemRewardKindWhitelist.Contains(kind))
+            throw new LlmValidationException(
+                $"field `{path}.kind` must be a whitelisted item-reward kind, got \"{kind}\"");
+        return new LlmItemReward(kind);
     }
 
     private LlmReward ParseCreditsReward(JObject obj, string path)

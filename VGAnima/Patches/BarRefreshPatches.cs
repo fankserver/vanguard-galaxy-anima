@@ -404,7 +404,19 @@ internal static class BarRefreshPatches
                     factionIdentifier: brokerInfo.StationFaction,
                     inFlight:          plugin.PersistedRegistry.All());
             }
-            context = plugin.Gatherer.Gather(plugin.GameStateView, brokerInfo, journal);
+            // Bar ecosystem — filter our own brokers out by seed so the
+            // broker about to speak doesn't see itself listed. Pulls from
+            // the in-flight registry's known VGAnima seeds at this
+            // station.
+            var vganimaSeedsHere = new HashSet<string>();
+            if (plugin.PersistedRegistry != null)
+                foreach (var e in plugin.PersistedRegistry.All())
+                    if (e.Broker.StationId == station.guid)
+                        vganimaSeedsHere.Add(e.Broker.Seed);
+            var barEcosystem    = BarEcosystemBuilder.Build(bar, vganimaSeedsHere);
+            var purchaseProfile = PurchaseProfileBuilder.Build();
+            context = plugin.Gatherer.Gather(
+                plugin.GameStateView, brokerInfo, journal, barEcosystem, purchaseProfile);
         }
         catch (Exception ex)
         {
@@ -740,7 +752,20 @@ internal static class BarRefreshPatches
             "REWARD TYPES:\n" +
             "  { \"type\": \"Credits\",    \"base_value\": 15..100 }\n" +
             "  { \"type\": \"Experience\", \"base_value\": 30..100 }\n" +
-            "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n\n" +
+            "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n" +
+            "  { \"type\": \"Item\",       \"kind\": one of [MiningClaim, SalvageClaim, MaterialMiningClaim] }\n" +
+            "      Tangible items handed over on completion, anchored to the broker\n" +
+            "      station's system. MiningClaim = a random asteroid-field claim.\n" +
+            "      SalvageClaim = a random derelict-field claim. MaterialMiningClaim =\n" +
+            "      a mining claim weighted toward a specific refined material (more\n" +
+            "      narrative flavor, slightly higher base value).\n" +
+            "      Use SPARINGLY. At most ONE item reward per mission. Offer item\n" +
+            "      rewards only when context.purchase_profile signals interest (e.g.\n" +
+            "      mining_claims_bought >= 2 for a MiningClaim reward) OR when the\n" +
+            "      mission archetype strongly fits (gather → MiningClaim, salvage →\n" +
+            "      SalvageClaim). A mismatched item reward feels random.\n" +
+            "      When offering an item reward, keep credits + xp on the LOW end of\n" +
+            "      their ranges — the item IS most of the payout.\n\n" +
             "RULES FOR EVERY DIALOGUE LINE:\n" +
             "- ASCII only (no em-dashes, smart quotes, or emoji; hyphens and straight apostrophes OK)\n" +
             $"- Maximum {ResponseValidator.DialogueLineSoftMaxLen} characters\n" +
@@ -815,6 +840,39 @@ internal static class BarRefreshPatches
             "  defenders AND loot at the same place. Do NOT collapse a multi-site or\n" +
             "  multi-phase narrative into one step just because it validates — the pitch will\n" +
             "  promise more than the mission delivers.\n" +
+            "- PURCHASE PROFILE — context.purchase_profile (if present) tallies lifetime\n" +
+            "  buys the player has made from bar salesmen. Non-zero categories are a\n" +
+            "  revealed-preference signal: the player spends credits on these things.\n" +
+            "  Use the numbers to tune how you PITCH your mission and what you OFFER:\n" +
+            "    * High mining_claims_bought → this player likes mining. Hint that the\n" +
+            "      job lets them work a claim they can't buy, or cite the claim dealer's\n" +
+            "      prices as context (\"you've been hitting up the Prospectors — I've\n" +
+            "      got something cheaper\").\n" +
+            "    * High salvage_claims_bought → same for salvage.\n" +
+            "    * High equipment_bought → player is gear-focused; reference loadout,\n" +
+            "      turret upgrades, weapon-class talk.\n" +
+            "    * space_ship_png_bought > 0 → player fell for the PNG scam. Joke\n" +
+            "      potential, broker can tease gently.\n" +
+            "  Do NOT add new reward types just because the profile is populated — the\n" +
+            "  current reward set is still Credits / Experience / Reputation. The profile\n" +
+            "  shapes DIALOGUE and REWARD MAGNITUDE choices, not reward type (item-type\n" +
+            "  rewards land in a later schema version).\n" +
+            "- BAR ECOSYSTEM — context.bar_ecosystem.other_salesmen_here (if present) lists\n" +
+            "  vanilla salesmen at THIS same bar right now. The broker can SEE them from\n" +
+            "  across the room. Kinds:\n" +
+            "    * Prospector         — sells a mining claim for this system.\n" +
+            "    * Salvage Scout      — sells a salvage claim for this system.\n" +
+            "    * Equipment Rep      — sells a ship module / turret / equipment piece\n" +
+            "                           (may carry a faction signal via item_identifier).\n" +
+            "    * Slick Entrepreneur — a scammer selling a literal PNG of a ship at an\n" +
+            "                           absurd markup. Comedic, not serious competition.\n" +
+            "    * Crew Recruiter     — a spacer looking to be hired onto a ship.\n" +
+            "  Use these for flavor references in dialogue (\"see that Prospector over\n" +
+            "  there? Their claim's a dud — mine's the real score\") OR as contrast\n" +
+            "  (\"while that Salvage Scout sells dead wrecks, MY job puts you on a live\n" +
+            "  one\"). Don't duplicate their offer shape — if a Prospector is hawking\n" +
+            "  mining claims and your mission is a pure gather, you're already the\n" +
+            "  cheaper alternative; lean into that, don't just echo them.\n" +
             "- JOURNAL — context.journal (if present) lists missions the player ALREADY has\n" +
             "  history with. Four windows:\n" +
             "    * local     — resolved events at THIS station (bar gossip).\n" +
@@ -1308,7 +1366,20 @@ internal static class RegistryRehydratePatches
             "REWARD TYPES:\n" +
             "  { \"type\": \"Credits\",    \"base_value\": 15..100 }\n" +
             "  { \"type\": \"Experience\", \"base_value\": 30..100 }\n" +
-            "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n\n" +
+            "  { \"type\": \"Reputation\", \"faction\": <faction>, \"amount\": -500..500 }\n" +
+            "  { \"type\": \"Item\",       \"kind\": one of [MiningClaim, SalvageClaim, MaterialMiningClaim] }\n" +
+            "      Tangible items handed over on completion, anchored to the broker\n" +
+            "      station's system. MiningClaim = a random asteroid-field claim.\n" +
+            "      SalvageClaim = a random derelict-field claim. MaterialMiningClaim =\n" +
+            "      a mining claim weighted toward a specific refined material (more\n" +
+            "      narrative flavor, slightly higher base value).\n" +
+            "      Use SPARINGLY. At most ONE item reward per mission. Offer item\n" +
+            "      rewards only when context.purchase_profile signals interest (e.g.\n" +
+            "      mining_claims_bought >= 2 for a MiningClaim reward) OR when the\n" +
+            "      mission archetype strongly fits (gather → MiningClaim, salvage →\n" +
+            "      SalvageClaim). A mismatched item reward feels random.\n" +
+            "      When offering an item reward, keep credits + xp on the LOW end of\n" +
+            "      their ranges — the item IS most of the payout.\n\n" +
             "RULES FOR EVERY DIALOGUE LINE:\n" +
             "- ASCII only (no em-dashes, smart quotes, or emoji; hyphens and straight apostrophes OK)\n" +
             $"- Maximum {ResponseValidator.DialogueLineSoftMaxLen} characters\n" +
@@ -1383,6 +1454,39 @@ internal static class RegistryRehydratePatches
             "  defenders AND loot at the same place. Do NOT collapse a multi-site or\n" +
             "  multi-phase narrative into one step just because it validates — the pitch will\n" +
             "  promise more than the mission delivers.\n" +
+            "- PURCHASE PROFILE — context.purchase_profile (if present) tallies lifetime\n" +
+            "  buys the player has made from bar salesmen. Non-zero categories are a\n" +
+            "  revealed-preference signal: the player spends credits on these things.\n" +
+            "  Use the numbers to tune how you PITCH your mission and what you OFFER:\n" +
+            "    * High mining_claims_bought → this player likes mining. Hint that the\n" +
+            "      job lets them work a claim they can't buy, or cite the claim dealer's\n" +
+            "      prices as context (\"you've been hitting up the Prospectors — I've\n" +
+            "      got something cheaper\").\n" +
+            "    * High salvage_claims_bought → same for salvage.\n" +
+            "    * High equipment_bought → player is gear-focused; reference loadout,\n" +
+            "      turret upgrades, weapon-class talk.\n" +
+            "    * space_ship_png_bought > 0 → player fell for the PNG scam. Joke\n" +
+            "      potential, broker can tease gently.\n" +
+            "  Do NOT add new reward types just because the profile is populated — the\n" +
+            "  current reward set is still Credits / Experience / Reputation. The profile\n" +
+            "  shapes DIALOGUE and REWARD MAGNITUDE choices, not reward type (item-type\n" +
+            "  rewards land in a later schema version).\n" +
+            "- BAR ECOSYSTEM — context.bar_ecosystem.other_salesmen_here (if present) lists\n" +
+            "  vanilla salesmen at THIS same bar right now. The broker can SEE them from\n" +
+            "  across the room. Kinds:\n" +
+            "    * Prospector         — sells a mining claim for this system.\n" +
+            "    * Salvage Scout      — sells a salvage claim for this system.\n" +
+            "    * Equipment Rep      — sells a ship module / turret / equipment piece\n" +
+            "                           (may carry a faction signal via item_identifier).\n" +
+            "    * Slick Entrepreneur — a scammer selling a literal PNG of a ship at an\n" +
+            "                           absurd markup. Comedic, not serious competition.\n" +
+            "    * Crew Recruiter     — a spacer looking to be hired onto a ship.\n" +
+            "  Use these for flavor references in dialogue (\"see that Prospector over\n" +
+            "  there? Their claim's a dud — mine's the real score\") OR as contrast\n" +
+            "  (\"while that Salvage Scout sells dead wrecks, MY job puts you on a live\n" +
+            "  one\"). Don't duplicate their offer shape — if a Prospector is hawking\n" +
+            "  mining claims and your mission is a pure gather, you're already the\n" +
+            "  cheaper alternative; lean into that, don't just echo them.\n" +
             "- JOURNAL — context.journal (if present) lists missions the player ALREADY has\n" +
             "  history with. Four windows:\n" +
             "    * local     — resolved events at THIS station (bar gossip).\n" +
