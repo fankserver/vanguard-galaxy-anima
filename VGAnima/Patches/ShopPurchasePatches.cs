@@ -71,13 +71,26 @@ internal static class ShopPurchasePatches
                     _                                => OtherShopCounter,
                 };
                 Register.AddCounter(counter, 1);
-                // `identifier` lives on ItemBuilder, not on InventoryItemType
-                // itself — same indirection BarPurchasePatches uses
-                // (salesman.itemForSale.itemBuilder.identifier). Without the
-                // itemBuilder hop the log prints `?` even on successful buys.
-                var id = item.item?.itemBuilder?.identifier ?? "?";
+                // Prefer the specific item's identifier
+                // (<see cref="Source.Item.InventoryItemType.identifier"/>)
+                // over the ItemBuilder category — the builder's id is the
+                // FAMILY (e.g. "SalvageClaim") while distinct equipment
+                // items like "Salvage Power I" and "Salvage Grinder MK.III"
+                // share the same builder but have their own identifiers
+                // on the item. Display name rides alongside for human
+                // log-reading; bar ecosystem BarPurchasePatches still
+                // uses the builder id deliberately (category counters).
+                var itemType  = item.item;
+                var specId    = itemType?.identifier;
+                var builderId = itemType?.itemBuilder?.identifier;
+                var id        = !string.IsNullOrEmpty(specId) ? specId
+                              : !string.IsNullOrEmpty(builderId) ? builderId
+                              : "?";
+                var displayName = itemType?.displayName;
+                var displaySuffix = string.IsNullOrEmpty(displayName)
+                    ? string.Empty : $" \"{displayName}\"";
                 Plugin.Log.LogDebug(
-                    $"ShopPurchase: {counter}++ (facility={shop.facility}, item={id})");
+                    $"ShopPurchase: {counter}++ (facility={shop.facility}, item={id}{displaySuffix})");
             }
             catch (Exception ex)
             {
