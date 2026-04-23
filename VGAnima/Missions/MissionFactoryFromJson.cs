@@ -281,7 +281,27 @@ internal static class MissionFactoryFromJson
             }
         }
 
-        return new CollectItemTypes
+        // Quantity-counting variant. Emit vanilla's
+        // `Source.MissionSystem.Objectives.Mining` instead of
+        // `CollectItemTypes` — same trigger (`ItemCollected`), same category
+        // filter, but counts ITEM AMOUNT rather than distinct types.
+        //
+        // Why this matters: `CollectItemTypes` uses a HashSet<string> keyed
+        // on item identifier. "15 salvage" means "15 DIFFERENT salvage item
+        // identifiers". A derelict field typically yields 5-8 distinct types;
+        // asking for 15 is near-impossible regardless of how many total
+        // items the player hauls. A live mission hit this — player cleared
+        // the site, filled cargo with Fragments (all sharing one identifier),
+        // and the counter stalled at 11/15.
+        //
+        // `Mining` (the class name is a vanilla misnomer — it covers every
+        // ItemCategory, not just Ore) counts `tractorableItemData.itemAmount`
+        // per pickup and is what vanilla's HelpMiner pairs alongside a
+        // CollectItemTypes diversity target. Here we want quantity only.
+        // Leaving `targetPOI` unset matches vanilla HelpMiner — counts player
+        // pickups of the category anywhere. With a spawned POI this still
+        // naturally concentrates counting at the wreck/field we created.
+        return new Source.MissionSystem.Objectives.Mining
         {
             itemCategory   = category,
             requiredAmount = block.RequiredAmount,
