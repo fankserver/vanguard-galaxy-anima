@@ -3,8 +3,15 @@ using Newtonsoft.Json;
 namespace VGAnima.Persistence;
 
 /// <summary>Top-level schema of a <c>&lt;save&gt;.vganima.json</c> sidecar.
-/// Version 1 is the only shape the current build understands; unknown
-/// versions are quarantined by <see cref="SidecarIO"/>.
+/// Version 2 is the current shape (intent-based mission records). v1
+/// sidecars — with <c>LlmKillEnemies</c> / <c>LlmClearPoi</c> /
+/// <c>LlmCollectItemTypes</c> / <c>LlmProtectUnit</c> / <c>LlmTriggerObjective</c>
+/// <c>$type</c> refs — are rejected here (version mismatch) or at the
+/// binder (deleted types); both paths quarantine the file via
+/// <see cref="SidecarIO"/> and let the game continue with an empty
+/// VGAnima registry. In-flight v1 broker missions appear as orphans on
+/// first v2 load; vanilla archives the zero-step
+/// <see cref="VGAnima.Missions.PlaceholderMission"/> on the next tick.
 ///
 /// <para>The <c>Entries</c> property is typed as <c>PersistedEntry[]</c>
 /// rather than <c>IReadOnlyList&lt;PersistedEntry&gt;</c> so its declared
@@ -16,14 +23,18 @@ namespace VGAnima.Persistence;
 internal sealed record SidecarSchema(
     [property: JsonProperty("version")] int Version,
     [property: JsonProperty("entries")] PersistedEntry[] Entries,
-    // Additive v1 field — nullable + default-null means v1 sidecars
-    // written before the journal landed deserialize unchanged (the
-    // reader treats a missing `completed_missions` field as an empty
-    // history). Schema version stays at 1; old installs keep loading.
+    // Additive v1 field that survives into v2 unchanged — completed
+    // missions are archetype-string + metadata, no LLM-objective type
+    // names, so the v1 → v2 break doesn't touch them.
     [property: JsonProperty("completed_missions", NullValueHandling = NullValueHandling.Ignore)]
     CompletedMissionRecord[]? CompletedMissions = null)
 {
-    public const int CurrentVersion = 1;
+    // v1 → v2 bump: v1 sidecars have `$type` refs to deleted objective
+    // types (LlmKillEnemies etc.). Version check in SidecarIO.Read
+    // triggers `UnsupportedVersion` quarantine before the binder has
+    // to reject those types. Either path ends in quarantine — clean
+    // break, no migration, no in-flight broker survives.
+    public const int CurrentVersion = 2;
 
     /// <summary>Shared Newtonsoft settings for read/write of sidecar JSON.
     /// <para><c>TypeNameHandling.Auto</c> is required because

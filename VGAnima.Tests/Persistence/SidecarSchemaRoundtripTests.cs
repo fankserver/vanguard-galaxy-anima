@@ -12,7 +12,7 @@ public class SidecarSchemaRoundtripTests
     public void Serializes_AndRoundtripsEntryShape()
     {
         var schema = new SidecarSchema(
-            Version: 1,
+            Version: SidecarSchema.CurrentVersion,
             Entries: new[]
             {
                 new PersistedEntry(
@@ -36,7 +36,7 @@ public class SidecarSchemaRoundtripTests
         var parsed = JsonConvert.DeserializeObject<SidecarSchema>(
             json, SidecarSchema.SerializerSettings)!;
 
-        Assert.Equal(1, parsed.Version);
+        Assert.Equal(SidecarSchema.CurrentVersion, parsed.Version);
         Assert.Single(parsed.Entries);
         var entry = parsed.Entries[0];
         Assert.Equal("vganima_llm_station-42_broker-abc_nonce-xyz", entry.StoryId);
@@ -68,9 +68,9 @@ public class SidecarSchemaRoundtripTests
     [Fact]
     public void Serializes_TopLevelKeysUsePlainNames()
     {
-        var schema = new SidecarSchema(Version: 1, Entries: System.Array.Empty<PersistedEntry>());
+        var schema = new SidecarSchema(Version: SidecarSchema.CurrentVersion, Entries: System.Array.Empty<PersistedEntry>());
         var json = JsonConvert.SerializeObject(schema, SidecarSchema.SerializerSettings);
-        Assert.Contains("\"version\":1", json);
+        Assert.Contains($"\"version\":{SidecarSchema.CurrentVersion}", json);
         Assert.Contains("\"entries\":[]", json);
     }
 
@@ -84,7 +84,7 @@ public class SidecarSchemaRoundtripTests
     public void Roundtrip_ProductionShapeWithListCollectionsSucceeds()
     {
         var schema = new SidecarSchema(
-            Version: 1,
+            Version: SidecarSchema.CurrentVersion,
             Entries: new[]
             {
                 new PersistedEntry(

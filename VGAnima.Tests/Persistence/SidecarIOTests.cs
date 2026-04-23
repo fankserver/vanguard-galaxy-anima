@@ -55,13 +55,13 @@ public class SidecarIOTests : IDisposable
     {
         var path = Path.Combine(_tempDir, "slot0.vganima.json");
         var io = new SidecarIO(() => DateTime.UtcNow);
-        var schema = new SidecarSchema(Version: 1, Entries: System.Array.Empty<PersistedEntry>());
+        var schema = new SidecarSchema(Version: SidecarSchema.CurrentVersion, Entries: System.Array.Empty<PersistedEntry>());
 
         io.Write(path, schema);
         var result = io.Read(path);
 
         Assert.Equal(SidecarReadStatus.Loaded, result.Status);
-        Assert.Equal(1, result.Schema!.Version);
+        Assert.Equal(SidecarSchema.CurrentVersion, result.Schema!.Version);
         Assert.Empty(result.Schema.Entries);
     }
 
@@ -70,7 +70,7 @@ public class SidecarIOTests : IDisposable
     {
         var path = Path.Combine(_tempDir, "slot0.vganima.json");
         var io = new SidecarIO(() => DateTime.UtcNow);
-        io.Write(path, new SidecarSchema(Version: 1, Entries: System.Array.Empty<PersistedEntry>()));
+        io.Write(path, new SidecarSchema(Version: SidecarSchema.CurrentVersion, Entries: System.Array.Empty<PersistedEntry>()));
 
         Assert.True(File.Exists(path));
         Assert.False(File.Exists(path + ".tmp"));
@@ -83,10 +83,10 @@ public class SidecarIOTests : IDisposable
         var io = new SidecarIO(() => DateTime.UtcNow);
         File.WriteAllText(path, "previous contents");
 
-        io.Write(path, new SidecarSchema(Version: 1, Entries: System.Array.Empty<PersistedEntry>()));
+        io.Write(path, new SidecarSchema(Version: SidecarSchema.CurrentVersion, Entries: System.Array.Empty<PersistedEntry>()));
 
         var contents = File.ReadAllText(path);
-        Assert.Contains("\"version\":1", contents);
+        Assert.Contains($"\"version\":{SidecarSchema.CurrentVersion}", contents);
         Assert.DoesNotContain("previous", contents);
     }
 
