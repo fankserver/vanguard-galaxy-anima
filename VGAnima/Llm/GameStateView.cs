@@ -76,15 +76,11 @@ internal sealed class GameStateView : IGameStateView
         {
             var ship = GamePlayer.current?.currentSpaceShip;
             if (ship == null) return null;
-            var hullPct   = ship.maxHullHP   > 0f ? (int)(100f * ship.currentHullHP   / ship.maxHullHP)   : 0;
-            var shieldPct = ship.maxShieldHP > 0f ? (int)(100f * ship.currentShieldHP / ship.maxShieldHP) : 0;
-            // cargoUsed/capacity intentionally NOT read — see LlmShipSnapshot.
+            // hull/shield/cargo intentionally NOT read — see LlmShipSnapshot.
             return new LlmShipSnapshot(
                 Name:              ship.name ?? string.Empty,
                 Faction:           ship.faction?.identifier ?? string.Empty,
                 Level:             ship.level,
-                HullPct:           hullPct,
-                ShieldPct:         shieldPct,
                 HasCombatLoadout:  ship.HasLoadout(GameplayType.Combat),
                 HasMiningLoadout:  ship.HasLoadout(GameplayType.Mining),
                 HasSalvageLoadout: ship.HasLoadout(GameplayType.Salvage));

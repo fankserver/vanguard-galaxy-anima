@@ -24,7 +24,6 @@ public class MissionGuidanceBuilderTests
         {
             PrimaryShip = new LlmShipSnapshot(
                 Name: "X", Faction: "Player", Level: 1,
-                HullPct: 100, ShieldPct: 100,
                 HasCombatLoadout: false, HasMiningLoadout: false, HasSalvageLoadout: false),
             StoredShips = new List<LlmStoredShipSnapshot>(),
             Crew        = new List<LlmCrewSnapshot>(),

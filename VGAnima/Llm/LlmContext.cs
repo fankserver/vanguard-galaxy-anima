@@ -119,14 +119,12 @@ internal sealed record LlmShipSnapshot(
     [property: JsonProperty("name")]          string Name,
     [property: JsonProperty("faction")]       string Faction,
     [property: JsonProperty("level")]         int Level,
-    // Hull + shield % survive — visibly beat-up hulls are observable on
-    // the dock (a broker can tell a battered pilot from a pristine one).
-    [property: JsonProperty("hull_pct")]      int HullPct,
-    [property: JsonProperty("shield_pct")]    int ShieldPct,
-    // `cargo_used_pct` is NOT exposed — how full your hold is is
-    // internal state the broker has no line of sight to. Removed
-    // 2026-04-23 along with player.credits on the same narrative-
-    // honesty principle.
+    // `hull_pct` + `shield_pct` NOT exposed: vanilla auto-repairs to
+    // 100/100 on dock, so a broker at the bar always sees a pristine
+    // ship regardless of combat history. The field would be
+    // observable-but-useless (a misleading "this pilot is fine" signal
+    // even right after a near-death fight). Removed 2026-04-23 along
+    // with cargo_used_pct and player.credits.
     // Hardpoint-derived loadout flags — the game's own HasLoadout check
     // (reads turrets + drone bay + torpedo bay, classified by the
     // GameplayType the mounted items declare). Externally observable:

@@ -23,7 +23,6 @@ public class ContextGathererTests
 
         public LlmShipSnapshot? PrimaryShip { get; set; } = new(
             Name: "Vanguard-X", Faction: "Player", Level: 14,
-            HullPct: 85, ShieldPct: 100,
             HasCombatLoadout: false, HasMiningLoadout: false, HasSalvageLoadout: false);
         public IReadOnlyList<LlmStoredShipSnapshot> StoredShips { get; set; } = new List<LlmStoredShipSnapshot>();
         public IReadOnlyList<LlmCrewSnapshot> Crew { get; set; } = new List<LlmCrewSnapshot>();
@@ -77,7 +76,7 @@ public class ContextGathererTests
 
         Assert.NotNull(ctx.Fleet.PrimaryShip);
         Assert.Equal("Vanguard-X", ctx.Fleet.PrimaryShip!.Name);
-        Assert.Equal(85, ctx.Fleet.PrimaryShip.HullPct);
+        Assert.Equal(14, ctx.Fleet.PrimaryShip.Level);
     }
 
     [Fact]

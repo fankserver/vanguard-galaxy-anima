@@ -45,7 +45,7 @@ make clean             # removes bin/ obj/ dist/
 **1. Context snapshot.** On bar refresh, `ContextGatherer` hands the LLM a JSON payload describing the player and world state a bar-broker NPC could plausibly know:
 
 - `player` — level, credits, specialization (one of nine: Leadership / Mining / Drones / Engineering / Industrial / Salvaging / Economy / Offense / Defense), unlocked titles, bounty/patrol/industry ladder ranks, active mission count + cap.
-- `fleet` — primary ship name/level/hull/shield, **hardpoint loadout flags** (`has_combat_loadout` / `has_mining_loadout` / `has_salvage_loadout` read via the game's `SpaceShipData.HasLoadout` check), cargo-used percentage, stored ships (up to 10), crew (up to 10).
+- `fleet` — primary ship name/level, **hardpoint loadout flags** (`has_combat_loadout` / `has_mining_loadout` / `has_salvage_loadout` read via the game's `SpaceShipData.HasLoadout` check), stored ships (up to 10), crew (up to 10). Hull/shield %, cargo-used %, and credit balance are NOT exposed — a broker NPC can't see into a private hold or wallet, and hull/shield auto-repair to 100 on dock would make those fields misleading anyway.
 - `location` — current station + faction + facilities, system, sector, quadrant, connected systems (up to 8, 2-jump radius).
 - `factions` — all 18 vanilla factions keyed by identifier, each carrying display name (e.g. `Marauders` → *Corsair Syndicate*), reputation value, and relation band (`friendly` / `neutral` / `hostile`, matching vanilla `FactionData.IsEnemy` — hostile iff `at_war` or `rep < -500`).
 - `reward_clamps` — numeric bounds for credit / XP / reputation amounts.
@@ -61,7 +61,7 @@ make clean             # removes bin/ obj/ dist/
 - `location.station_condition` — single-word atmosphere tag (`war-torn` / `peaceful` / `bustling` / `frontier` / `normal`) that nudges the broker's linguistic register.
 - `story_arcs_active`, `waypoints`, `time`, `broker` (name, gender, seed, station alignment).
 
-Cargo contents are **not** included — a broker NPC can't see into the player's hold. Ship exterior state (hull damage, mass/loading) is surfaced.
+Cargo contents, cargo %, credit balance, and hull/shield % are **not** included. A broker can't see into a private hold or wallet; mounted hardpoints ARE externally visible on a docked ship, so loadout flags stay.
 
 **2. Archetype pre-scoring.** `MissionGuidanceBuilder` weights five mission archetypes by signal aggregation *before* the LLM sees the context. The LLM reads our conclusion, not scattered raw signals.
 
