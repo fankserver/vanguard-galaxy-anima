@@ -47,95 +47,61 @@ public class WhitelistsTests
         Assert.False(FactionWhitelist.Contains(id));
     }
 
-    // -------- Trigger --------
+    // -------- Intent (v2) --------
     [Fact]
-    public void TriggerWhitelist_HasExactlyThreeEntries()
+    public void IntentWhitelist_HasExactlySevenEntries()
     {
-        Assert.Equal(3, TriggerWhitelist.All.Count);
+        // v2 intents. escort_to_station deferred until the vanilla escort
+        // pattern (CreateFixedPayload + CreateEscortLocation +
+        // EscortUnitCargoUnloaded trigger) is wired up — shipping 7
+        // that all work beats shipping 8 where the 8th is flaky.
+        Assert.Equal(7, IntentWhitelist.All.Count);
     }
 
     [Theory]
-    [InlineData("DockedWithSpaceStation")]
-    [InlineData("ArrivedAtSpaceStation")]
-    [InlineData("MoveToArea")]
-    public void TriggerWhitelist_Contains_Allowed(string trigger)
+    [InlineData("clear_combat_site")]
+    [InlineData("gather_ore")]
+    [InlineData("gather_salvage")]
+    [InlineData("defended_gather_ore")]
+    [InlineData("defended_gather_salvage")]
+    [InlineData("deliver_to_station")]
+    [InlineData("haul_goods")]
+    public void IntentWhitelist_Contains_Allowed(string intent)
     {
-        Assert.True(TriggerWhitelist.Contains(trigger));
+        Assert.True(IntentWhitelist.Contains(intent));
     }
 
     [Theory]
-    [InlineData("UnitDestroyed")]
-    [InlineData("TravelToPOI")]      // spec typo: real enum is MoveToArea
-    [InlineData("dockedWithSpaceStation")]  // case-sensitive
+    [InlineData("escort_to_station")] // deferred; MUST be rejected until it ships
+    [InlineData("KillEnemies")]       // old v1 objective type
+    [InlineData("ClearPoi")]          // old v1 objective type
+    [InlineData("GATHER_ORE")]        // case-sensitive
     [InlineData("")]
-    public void TriggerWhitelist_Rejects_Others(string trigger)
+    public void IntentWhitelist_Rejects_Others(string intent)
     {
-        Assert.False(TriggerWhitelist.Contains(trigger));
-    }
-
-    // -------- ItemCategory --------
-    [Fact]
-    public void ItemCategoryWhitelist_HasExactlyFourEntries()
-    {
-        Assert.Equal(4, ItemCategoryWhitelist.All.Count);
+        Assert.False(IntentWhitelist.Contains(intent));
     }
 
     [Theory]
-    [InlineData("Ore")]
-    [InlineData("Salvage")]
-    [InlineData("RefinedProduct")]
-    [InlineData("TradeGoods")]
-    public void ItemCategoryWhitelist_Contains_Allowed(string cat)
+    // Simple archetype intents — single entry.
+    [InlineData("clear_combat_site", new[] { "combat" })]
+    [InlineData("gather_ore",        new[] { "gather" })]
+    [InlineData("gather_salvage",    new[] { "salvage" })]
+    [InlineData("deliver_to_station", new[] { "deliver" })]
+    // Composite — forbidding EITHER archetype must block the intent.
+    [InlineData("defended_gather_ore",     new[] { "combat", "gather" })]
+    [InlineData("defended_gather_salvage", new[] { "combat", "salvage" })]
+    [InlineData("haul_goods",              new[] { "gather", "deliver" })]
+    public void IntentWhitelist_Archetypes_Correct(string intent, string[] expected)
     {
-        Assert.True(ItemCategoryWhitelist.Contains(cat));
-    }
-
-    [Theory]
-    [InlineData("Ammo")]
-    [InlineData("Crystal")]
-    [InlineData("Empty")]
-    [InlineData("IronOre")]   // item identifier, not a category
-    [InlineData("Junk")]      // reserved for special-quest variants (docs/special-quest-ideas.md)
-    [InlineData("")]
-    public void ItemCategoryWhitelist_Rejects_Others(string cat)
-    {
-        Assert.False(ItemCategoryWhitelist.Contains(cat));
-    }
-
-    // -------- ObjectiveType --------
-    [Fact]
-    public void ObjectiveTypeWhitelist_HasExactlyFiveEntries()
-    {
-        Assert.Equal(5, ObjectiveTypeWhitelist.All.Count);
-    }
-
-    [Theory]
-    [InlineData("KillEnemies")]
-    [InlineData("ProtectUnit")]
-    [InlineData("TriggerObjective")]
-    [InlineData("CollectItemTypes")]
-    [InlineData("ClearPoi")]
-    public void ObjectiveTypeWhitelist_Contains_Allowed(string type)
-    {
-        Assert.True(ObjectiveTypeWhitelist.Contains(type));
-    }
-
-    [Theory]
-    [InlineData("TradeOffer")]
-    [InlineData("Mining")]
-    [InlineData("Salvage")]
-    [InlineData("kill_enemies")]
-    [InlineData("")]
-    public void ObjectiveTypeWhitelist_Rejects_Others(string type)
-    {
-        Assert.False(ObjectiveTypeWhitelist.Contains(type));
+        var archetypes = IntentWhitelist.Archetypes(intent);
+        Assert.Equal(expected, archetypes);
     }
 
     // -------- RewardType --------
     [Fact]
     public void RewardTypeWhitelist_HasExactlyFourEntries()
     {
-        // v1-item-rewards bumped this from 3 to 4 — Item was added.
         Assert.Equal(4, RewardTypeWhitelist.All.Count);
     }
 

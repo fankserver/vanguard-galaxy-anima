@@ -16,9 +16,7 @@ namespace VGAnima.Cache;
 ///       binding without a live <see cref="SpaceStation"/>.</item>
 ///     <item>The unique <c>storyId</c> for this broker's LLM-authored mission.
 ///       Minted by <see cref="VGAnima.Missions.LlmMissionAssigner"/> after the
-///       LLM call validates and the Mission is built+registered; never rewritten.
-///       Legacy v1 records (with fixed <c>vganima_test_jobsite_survey</c>) still
-///       load via <see cref="VGAnima.Missions.TestStoryMissions"/>.</item>
+///       LLM call validates and the Mission is built+registered; never rewritten.</item>
 ///     <item>The validated <see cref="LlmStory"/> — dialogue + optional
 ///       <see cref="LlmMissionBlock"/>. For v2-mission responses the Mission
 ///       block is already materialized as a live registered Mission; the block

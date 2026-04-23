@@ -59,15 +59,6 @@ public class Plugin : BaseUnityPlugin
 
         Cfg = new AnimaConfig(Config);
 
-        // Register the legacy TestStoryMissions factory so in-flight saves
-        // with the v1 storyId `vganima_test_jobsite_survey` rehydrate
-        // cleanly (spec §12 recommendation 1). The factory is marked
-        // [Obsolete]; suppression is local so the rest of the build stays
-        // warning-clean.
-#pragma warning disable CS0618
-        TestStoryMissions.Register();
-#pragma warning restore CS0618
-
         PlayerView      = new GamePlayerView();
         Vgtts           = new VgttsBridge();
         Registry        = new ConversionRegistry<BarPatron, ConversionRecord>();

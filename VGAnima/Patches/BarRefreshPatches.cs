@@ -623,12 +623,15 @@ internal static class BarRefreshPatches
             }
             else
             {
-#pragma warning disable CS0618
-                storyId = TestStoryMissions.JobsiteSurveyId;
-#pragma warning restore CS0618
+                // v2 requires a mission block. If the LLM somehow returned
+                // a dialogue-only story (ExpectedSchemaV1), there's no
+                // fallback — the legacy TestStoryMissions factory was
+                // deleted with the v1 surface. Skip the broker; next
+                // patron gets a fresh roll.
                 Plugin.Log.LogWarning(
-                    $"LLM returned v1 dialogue-only schema; falling back to legacy " +
-                    $"'{storyId}' for broker at '{station.name}'");
+                    $"LLM returned dialogue-only schema with no mission block; " +
+                    $"skipping broker at '{station.name}' (no legacy fallback under v2)");
+                return;
             }
 
             // Build dialogueLines from the pitch block so VGTTS's BarPatron.Initialize
