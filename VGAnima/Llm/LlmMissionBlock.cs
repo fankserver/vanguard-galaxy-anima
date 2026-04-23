@@ -42,10 +42,19 @@ internal abstract record LlmIntent(string Description);
 /// hostile guards of <paramref name="EnemyFaction"/> in the broker
 /// station's system, pins it to the step, and emits a <c>KillEnemies</c>
 /// objective whose <c>requiredAmount</c> = the spawn's
-/// <c>totalUnitCount</c>. Mirrors vanilla <c>BountyHunt.GenerateMission</c>.</summary>
+/// <c>totalUnitCount</c>. Mirrors vanilla <c>BountyHunt.GenerateMission</c>.
+///
+/// <para><see cref="Flavor"/> (optional) selects one of a small closed
+/// list of narrative shapes (<see cref="CombatFlavorWhitelist"/>). The
+/// plugin owns the concrete ship composition per flavor — initial
+/// spawn + reinforcement timing — and the LLM picks whichever flavor
+/// matches its pitch ("we spotted scouts" → scouting, "they're dug
+/// in" → outpost, "hidden lair" → lair). Null falls back to the
+/// balanced default composition.</para></summary>
 internal sealed record ClearCombatSiteIntent(
     string EnemyFaction,
-    string Description) : LlmIntent(Description);
+    string Description,
+    string? Flavor = null) : LlmIntent(Description);
 
 /// <summary>"Go mine at an asteroid field." Plugin spawns a Mining POI
 /// (via <c>AddMiningPoi</c>) in the broker's system, pins it to the

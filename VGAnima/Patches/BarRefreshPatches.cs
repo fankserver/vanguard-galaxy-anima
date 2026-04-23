@@ -737,10 +737,35 @@ internal static class BarRefreshPatches
             "objectives + POI combo that implements the narrative shape):\n" +
             "  { \"intent\": \"clear_combat_site\",\n" +
             "    \"enemy_faction\":   <hostile faction from list above>,\n" +
+            "    \"flavor\":          one of [scouting, outpost, lair] (OPTIONAL),\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "      Plugin spawns a Combat POI with enemy guards in the broker's\n" +
             "      system. Step completes when the zone is cleared. Use for\n" +
             "      \"go fight at a specific place\" missions.\n" +
+            "      flavor (optional) picks a narrative composition — plugin owns\n" +
+            "      the fleet, but flavor determines its shape AND the\n" +
+            "      reinforcement beats. Match the flavor to your pitch:\n" +
+            "        * scouting: initial 2 small + 1 medium, fast wave (15s)\n" +
+            "          2 small, slow wave (45s) 1 big. Reads as \"patrol sighted,\n" +
+            "          called for backup, then a heavy responded.\" Pitch should\n" +
+            "          say \"we spotted a patrol\" / \"scouts are circling\" /\n" +
+            "          \"they saw our convoy and called home\".\n" +
+            "        * outpost: initial 1 big + 4 small, fast wave (20s) 4 small,\n" +
+            "          slow wave (60s) 2 big. A dug-in garrison — command ship\n" +
+            "          and escorts, perimeter patrols closing in, then HQ\n" +
+            "          reserves. Pitch should say \"they've fortified\" /\n" +
+            "          \"an outpost\" / \"a dug-in position\" / \"they are\n" +
+            "          occupying\".\n" +
+            "        * lair: initial 3 big, fast wave (15s) 3 small, slow wave\n" +
+            "          (45s) 2 big. A hidden ambush — heavy up front, perimeter\n" +
+            "          scouts racing back, then reserves from another hideout.\n" +
+            "          Pitch should say \"hidden base\" / \"a lair\" / \"an ambush\"\n" +
+            "          / \"they're using the wreck as a base\".\n" +
+            "      Omit flavor for a balanced 3-5 ship engagement with a single\n" +
+            "      2-3 ship reinforcement wave (the default). Pick a flavor ONLY\n" +
+            "      when your pitch genuinely fits one of the three shapes —\n" +
+            "      a mismatched flavor (e.g. \"lair\" on a patrol pitch) creates\n" +
+            "      narrative dissonance for the player.\n" +
             "  { \"intent\": \"gather_ore\",\n" +
             "    \"required_amount\": 1..50,\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +

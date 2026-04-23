@@ -219,6 +219,55 @@ public class MissionBlockValidatorTests
             () => Validator().Parse(m, Hostiles, Rep));
     }
 
+    [Theory]
+    [InlineData("scouting")]
+    [InlineData("outpost")]
+    [InlineData("lair")]
+    public void Parse_ClearCombatSite_Flavor_Accepts(string flavor)
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]        = "clear_combat_site",
+            ["enemy_faction"] = "Marauders",
+            ["flavor"]        = flavor,
+            ["description"]   = "Clear them.",
+        }));
+        var block  = Validator().Parse(m, Hostiles, Rep);
+        var intent = Assert.IsType<ClearCombatSiteIntent>(block.Steps[0].Intent);
+        Assert.Equal(flavor, intent.Flavor);
+    }
+
+    [Fact]
+    public void Parse_ClearCombatSite_UnknownFlavor_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]        = "clear_combat_site",
+            ["enemy_faction"] = "Marauders",
+            ["flavor"]        = "kamikaze",          // not whitelisted
+            ["description"]   = "d",
+        }));
+        var ex = Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+        Assert.Contains("flavor", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_ClearCombatSite_NoFlavor_NullOnRecord()
+    {
+        // Omitting flavor is valid — factory falls back to the balanced
+        // composition. Confirmed via Flavor == null on the record.
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]        = "clear_combat_site",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "d",
+        }));
+        var block  = Validator().Parse(m, Hostiles, Rep);
+        var intent = Assert.IsType<ClearCombatSiteIntent>(block.Steps[0].Intent);
+        Assert.Null(intent.Flavor);
+    }
+
     // -------- gather_ore / gather_salvage --------
 
     [Fact]

@@ -192,11 +192,29 @@ internal static class MissionFactoryFromJson
         }
     }
 
+    // Ship-size pointsScale presets. `CreateUnitPayload`'s pointsScale
+    // multiplies the POI's pointsValue (max(34, level*4)) to form each
+    // unit's strength budget. Pinning minUnits==maxUnits to a fixed
+    // count per call gives us explicit "N small ships" / "1 big ship"
+    // composition without guessing at random rolls. Mixing sizes in one
+    // wave = two CreateUnitPayload calls concatenated.
+    private const float SmallScale  = 0.4f;
+    private const float MediumScale = 0.9f;
+    private const float BigScale    = 1.8f;
+
     /// <summary>Mirrors vanilla <c>BountyHunt.GenerateMission</c>: spawn a
     /// Combat POI with enemy guards in the broker's system, pin it to the
     /// step, emit a <c>KillEnemies</c> objective whose requiredAmount =
     /// the spawn's totalUnitCount. Player clears the zone; step
-    /// auto-completes.</summary>
+    /// auto-completes.
+    ///
+    /// <para>If <see cref="ClearCombatSiteIntent.Flavor"/> is set, the
+    /// plugin composes a flavor-specific fleet (scouting / outpost /
+    /// lair) with initial spawn + fast + slow reinforcement waves. The
+    /// reinforcement timing exploits vanilla's ship-speed physics —
+    /// smaller ships reach the player faster than larger ones — so
+    /// "fast" waves are small scouts and "slow" waves are capital-class
+    /// responders.</para></summary>
     private static void BuildClearCombatSite(
         ClearCombatSiteIntent intent, MissionStep step, SpaceStation? brokerStation,
         int missionLevel)
@@ -208,40 +226,111 @@ internal static class MissionFactoryFromJson
         var enemyFaction = Faction.Get(intent.EnemyFaction);
         var combat       = brokerStation.system.AddCombat(enemyFaction);
 
-        // Two knobs on CreateUnitPayload:
-        //   pointsScale — size/strength budget per spawn (multiplies the
-        //     POI's pointsValue). Lowering keeps individual ships matched
-        //     to the station level rather than oversized.
-        //   minUnits / maxUnits — the RANDOM unit count range. Default
-        //     is 1..5, which can roll to 1 — a live run hit this and the
-        //     site spawned a single ship ("a joke, free reward"). We
-        //     pin the floor so "clear the zone" always means engaging a
-        //     multi-ship presence.
-        var payloadMultiplier = Math.Clamp(1.5f + missionLevel * 0.1f, 1.5f, 3f);
-        combat.AddGuards(combat.CreateUnitPayload(
-            pointsScale: payloadMultiplier,
-            gType:       GameplayType.Combat,
-            minUnits:    3,
-            maxUnits:    5));
-
-        // Reinforcement wave 25s after player enters — matches vanilla's
-        // HelpCombat / BountyHunt pattern (second wave of the same
-        // archetype, smaller scale).
-        combat.AddTriggeredSpawn(
-            combat.CreateUnitPayload(
-                pointsScale: 1f,
-                gType:       GameplayType.Combat,
-                minUnits:    2,
-                maxUnits:    3),
-            spawnDelay: 25f);
+        switch (intent.Flavor)
+        {
+            case CombatFlavorWhitelist.Scouting: SpawnScoutingFleet(combat, enemyFaction); break;
+            case CombatFlavorWhitelist.Outpost:  SpawnOutpostFleet (combat, enemyFaction); break;
+            case CombatFlavorWhitelist.Lair:     SpawnLairFleet    (combat, enemyFaction); break;
+            default:                             SpawnBalancedFleet(combat, enemyFaction, missionLevel); break;
+        }
 
         step.dynamicPointOfInterest = combat;
-
         step.objectives.Add(new KillEnemies
         {
             enemyFaction   = enemyFaction,
             requiredAmount = combat.totalUnitCount,
         });
+    }
+
+    /// <summary>Default composition when the LLM didn't pick a flavor.
+    /// 3-5 ships initial + 2-3 ship reinforcement wave at 25s. Matches
+    /// the pre-flavor behavior so old missions feel unchanged.</summary>
+    private static void SpawnBalancedFleet(MapPointOfInterest combat, Faction enemy, int missionLevel)
+    {
+        var scale = Math.Clamp(1.5f + missionLevel * 0.1f, 1.5f, 3f);
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: scale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 3, maxUnits: 5));
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: 1f, gType: GameplayType.Combat, f: enemy,
+                minUnits: 2, maxUnits: 3),
+            spawnDelay: 25f);
+    }
+
+    /// <summary>"We spotted some scouts." Initial 2 small + 1 medium = a
+    /// patrol that noticed the player. Fast wave (15s) 2 small = the
+    /// patrol called home. Slow wave (45s) 1 big = heavier reaction
+    /// force. Engagement stays lethal but feels like a sequence of
+    /// escalating sightings.</summary>
+    private static void SpawnScoutingFleet(MapPointOfInterest combat, Faction enemy)
+    {
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 2, maxUnits: 2));
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: MediumScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 1, maxUnits: 1));
+
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 2, maxUnits: 2),
+            spawnDelay: 15f);
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 1, maxUnits: 1),
+            spawnDelay: 45f);
+    }
+
+    /// <summary>"They're fortifying the position." Initial 1 big + 4 small
+    /// = command ship + escorts (a dug-in garrison). Fast wave (20s)
+    /// 4 small = outer-perimeter patrols closing in. Slow wave (60s)
+    /// 2 big = HQ response. Pulls engagement out — the player has to
+    /// commit to clearing the zone.</summary>
+    private static void SpawnOutpostFleet(MapPointOfInterest combat, Faction enemy)
+    {
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 1, maxUnits: 1));
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 4, maxUnits: 4));
+
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 4, maxUnits: 4),
+            spawnDelay: 20f);
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 2, maxUnits: 2),
+            spawnDelay: 60f);
+    }
+
+    /// <summary>"A hidden Corsair lair." Initial 3 big = heavy up front,
+    /// the trap was set. Fast wave (15s) 3 small = scouts posted at
+    /// the perimeter racing back. Slow wave (45s) 2 big = reserves from
+    /// a secondary hideout. Most dangerous flavor — player starts at
+    /// the deepest end.</summary>
+    private static void SpawnLairFleet(MapPointOfInterest combat, Faction enemy)
+    {
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 3, maxUnits: 3));
+
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 3, maxUnits: 3),
+            spawnDelay: 15f);
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 2, maxUnits: 2),
+            spawnDelay: 45f);
     }
 
     /// <summary>Unified builder for gather_ore / gather_salvage and their

@@ -214,10 +214,44 @@ internal sealed class MissionBlockValidator
         IReadOnlyList<string> atWar,
         IReadOnlyDictionary<string, int> reputation)
     {
-        RequireStrictKeys(obj, path, "intent", "enemy_faction", "description");
+        RequireKeys(obj, path,
+            required: new[] { "intent", "enemy_faction", "description" },
+            optional: new[] { "flavor" });
         var faction = ReadHostileFaction(obj, $"{path}.enemy_faction", atWar, reputation);
         var desc    = ReadObjectiveDescription(obj, $"{path}.description");
-        return new ClearCombatSiteIntent(faction, desc);
+
+        string? flavor = null;
+        if (obj.ContainsKey("flavor"))
+        {
+            var tok = obj["flavor"]!;
+            if (tok.Type != JTokenType.String)
+                throw new LlmValidationException(
+                    $"field `{path}.flavor` must be a string");
+            var f = tok.Value<string>() ?? string.Empty;
+            if (!CombatFlavorWhitelist.Contains(f))
+                throw new LlmValidationException(
+                    $"field `{path}.flavor` must be a whitelisted flavor, got \"{f}\". " +
+                    $"Valid flavors: {string.Join(", ", CombatFlavorWhitelist.All)}");
+            flavor = f;
+        }
+
+        return new ClearCombatSiteIntent(faction, desc, flavor);
+    }
+
+    // Variant of RequireStrictKeys for objects with required + optional
+    // fields. Used by intents that have optional params (e.g. `flavor`
+    // on combat intents).
+    private static void RequireKeys(JObject obj, string path, string[] required, string[] optional)
+    {
+        var allowed = new HashSet<string>(required);
+        foreach (var opt in optional) allowed.Add(opt);
+        foreach (var prop in obj.Properties())
+            if (!allowed.Contains(prop.Name))
+                throw new LlmValidationException(
+                    $"unexpected field `{path}.{prop.Name}`");
+        foreach (var key in required)
+            if (!obj.ContainsKey(key))
+                throw new LlmValidationException($"missing field `{path}.{key}`");
     }
 
     private LlmIntent ParseGatherOre(JObject obj, string path)
