@@ -394,15 +394,42 @@ internal static class BarRefreshPatches
             // Journal section is built per-broker from the registry's
             // completed-mission log. Toggled by Style.IncludePlayerJournal;
             // when off we pass null and the LlmContext omits the field.
-            // See JournalContextBuilder for the three-window filter logic.
+            // See JournalContextBuilder for the reach-formula filter logic.
             LlmJournalSection? journal = null;
             if (plugin.Cfg.IncludePlayerJournal.Value && plugin.PersistedRegistry != null)
             {
+                // Reach-formula inputs: broker's current system guid
+                // (falls back to station-name-derived empty → unreachable
+                // safely when missing), current game-seconds for age
+                // penalty, max-rank for fame bonus.
+                var brokerSystemGuid = station?.system?.guid ?? string.Empty;
+                var jumpsToBroker    = VGAnima.Galaxy.VanillaSystemGraph
+                                        .JumpsToBrokerFrom(brokerSystemGuid);
+                var fame = System.Math.Max(
+                    plugin.GameStateView.BountyRank,
+                    System.Math.Max(plugin.GameStateView.PatrolRank,
+                                    plugin.GameStateView.IndustryRank));
+
                 journal = JournalContextBuilder.Build(
                     plugin.PersistedRegistry.CompletedMissions,
-                    stationId:         station.guid,
-                    factionIdentifier: brokerInfo.StationFaction,
-                    inFlight:          plugin.PersistedRegistry.All());
+                    stationId:                 station!.guid,
+                    factionIdentifier:         brokerInfo.StationFaction,
+                    jumpsFromStationToBroker:  jumpsToBroker,
+                    currentGameSeconds:        plugin.Clock.GameSeconds,
+                    playerFame:                fame,
+                    inFlight:                  plugin.PersistedRegistry.All());
+            }
+            // Regional recognition: systems where the player is a
+            // regular. Composed independently of journal — survives the
+            // IncludePlayerJournal toggle (it's a lightweight face-
+            // recognition signal, not mission chatter).
+            IReadOnlyList<LlmRegionallyKnownEntry>? regionallyKnown = null;
+            if (plugin.PersistedRegistry != null)
+            {
+                regionallyKnown = RegionallyKnownBuilder.Build(
+                    plugin.PersistedRegistry.VisitedSystems,
+                    plugin.PersistedRegistry.CompletedMissions,
+                    currentGameSeconds: plugin.Clock.GameSeconds);
             }
             // Bar ecosystem — filter our own brokers out by seed so the
             // broker about to speak doesn't see itself listed. Pulls from
@@ -411,17 +438,18 @@ internal static class BarRefreshPatches
             var vganimaSeedsHere = new HashSet<string>();
             if (plugin.PersistedRegistry != null)
                 foreach (var e in plugin.PersistedRegistry.All())
-                    if (e.Broker.StationId == station.guid)
+                    if (e.Broker.StationId == station!.guid)
                         vganimaSeedsHere.Add(e.Broker.Seed);
             var barEcosystem    = BarEcosystemBuilder.Build(bar, vganimaSeedsHere);
             var purchaseProfile = PurchaseProfileBuilder.Build();
             // Stations the LLM may target via deliver_to_station / haul_goods.
             // Empty list in pocket systems — context serializer omits the
             // field entirely and the validator rejects those intents.
-            var destinations    = AccessibleDestinationsBuilder.Build(station);
+            var destinations    = AccessibleDestinationsBuilder.Build(station!);
             context = plugin.Gatherer.Gather(
                 plugin.GameStateView, brokerInfo, journal, barEcosystem,
-                purchaseProfile, accessibleDestinations: destinations);
+                purchaseProfile, accessibleDestinations: destinations,
+                regionallyKnown: regionallyKnown);
         }
         catch (Exception ex)
         {

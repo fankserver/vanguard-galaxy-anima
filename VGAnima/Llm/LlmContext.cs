@@ -68,6 +68,20 @@ internal sealed class LlmContext
     [JsonProperty("accessible_destinations", NullValueHandling = NullValueHandling.Ignore)]
     public IReadOnlyList<AccessibleDestination>? AccessibleDestinations { get; set; }
 
+    /// <summary>Systems where the player has accumulated enough visits
+    /// (<see cref="RegionallyKnownBuilder.MinVisitsThreshold"/>) that a
+    /// broker there can plausibly recognize their face. Optional
+    /// <c>recent_activity</c> carries the archetype of their most recent
+    /// completed mission in that system, gated on a
+    /// <see cref="RegionallyKnownBuilder.StaleActivityDaysThreshold"/>
+    /// freshness window — tells the broker HOW to frame the recognition
+    /// ("you've been salvaging around Zoran, yeah?"). Null
+    /// <c>recent_activity</c> = face-only ("seen you around"). Omitted
+    /// from JSON when empty. See
+    /// <see cref="RegionallyKnownBuilder"/>.</summary>
+    [JsonProperty("regionally_known", NullValueHandling = NullValueHandling.Ignore)]
+    public IReadOnlyList<LlmRegionallyKnownEntry>? RegionallyKnown { get; set; }
+
     [JsonProperty("story_arcs_active")] public IReadOnlyList<string> StoryArcsActive { get; set; } = null!;
     [JsonProperty("waypoints")]    public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = null!;
     [JsonProperty("time")]         public LlmTimeSection     Time         { get; set; } = null!;
@@ -215,10 +229,16 @@ internal sealed record BrokerInfo(
 
 /// <summary>Per-broker journal view. Four windows built by
 /// <see cref="JournalContextBuilder"/>: three for RESOLVED missions
-/// (local / factional / notable) and one for IN-FLIGHT missions
-/// (active). Each entry is a compact snapshot the LLM reads as narrative
-/// anchors — "you've been salvaging here lately" / "I heard you're
-/// already running a Corsair job, let me pitch something different."
+/// (local / network / rumors) and one for IN-FLIGHT missions (active).
+/// Each entry is a compact snapshot the LLM reads as narrative anchors
+/// — "you've been salvaging here lately" / "I heard you're already
+/// running a Corsair job, let me pitch something different."
+///
+/// <para>Reach model: each resolved entry passes a reach gate that
+/// combines distance (jumps_away), age, magnitude, faction alignment,
+/// and player fame. Gossip always travels to adjacent systems; far
+/// systems only hear big events, old events, or events involving
+/// famous players. See <c>MagnitudeReachFormula</c>.</para>
 ///
 /// <para>Why active is a peer window, not a substate: an offered or
 /// accepted mission that hasn't resolved yet is load-bearing for
@@ -227,18 +247,26 @@ internal sealed record BrokerInfo(
 /// in-flight entry.</para></summary>
 internal sealed class LlmJournalSection
 {
-    /// <summary>Resolved events at THIS station. Bar-gossip level of detail.</summary>
-    [JsonProperty("local")]     public IReadOnlyList<LlmJournalEntry> Local     { get; set; } = null!;
-    /// <summary>Resolved events involving the SAME faction elsewhere. Intel-
-    /// network level; the broker heard through channels.</summary>
-    [JsonProperty("factional")] public IReadOnlyList<LlmJournalEntry> Factional { get; set; } = null!;
-    /// <summary>Resolved high-magnitude events regardless of location.
-    /// Famous deeds travel everywhere.</summary>
-    [JsonProperty("notable")]   public IReadOnlyList<LlmJournalEntry> Notable   { get; set; } = null!;
+    /// <summary>Resolved events at THIS station. Bar-gossip level of
+    /// detail; always visible, you were here when it happened.</summary>
+    [JsonProperty("local")]   public IReadOnlyList<LlmJournalEntry> Local   { get; set; } = null!;
+    /// <summary>Resolved events within reach via the faction's internal
+    /// network — same <c>source_faction</c> as the broker, close enough
+    /// to have filtered through channels. Renamed from <c>factional</c>
+    /// in JC-T6; the new name tracks the reach-formula meaning rather
+    /// than the bare faction filter that preceded it.</summary>
+    [JsonProperty("network")] public IReadOnlyList<LlmJournalEntry> Network { get; set; } = null!;
+    /// <summary>Resolved events that reached the broker despite being
+    /// out-of-network — either different faction, or the same faction
+    /// far enough away that only the magnitude pushed them through.
+    /// Distant hearsay register: acknowledge the distance when the
+    /// broker references these ("heard out of Zoran, way on the edge").
+    /// Renamed from <c>notable</c> in JC-T6.</summary>
+    [JsonProperty("rumors")]  public IReadOnlyList<LlmJournalEntry> Rumors  { get; set; } = null!;
     /// <summary>IN-FLIGHT missions the broker can plausibly know about
     /// (same station OR same faction elsewhere). Outcome is always
     /// <c>"in_progress"</c>. Used by the prompt's non-duplication rule.</summary>
-    [JsonProperty("active")]    public IReadOnlyList<LlmJournalEntry> Active    { get; set; } = null!;
+    [JsonProperty("active")]  public IReadOnlyList<LlmJournalEntry> Active  { get; set; } = null!;
 }
 
 internal sealed record LlmJournalEntry(
@@ -250,7 +278,30 @@ internal sealed record LlmJournalEntry(
     [property: JsonProperty("station_name")]         string StationName,
     [property: JsonProperty("system_name")]          string SystemName,
     [property: JsonProperty("resolved_game_seconds")] double ResolvedGameSeconds,
-    [property: JsonProperty("magnitude")]            int    Magnitude);
+    [property: JsonProperty("magnitude")]            int    Magnitude,
+    // Jumps from the record's resolved station to the broker's current
+    // system, computed at context-build time by
+    // <see cref="JournalContextBuilder"/>. 0 for <c>local</c> entries;
+    // positive for network/rumors; lets the LLM voice the narrative
+    // distance ("way over in X" vs "couple jumps from here"). Default
+    // 0 keeps the field backwards-compatible with fixtures that don't
+    // set it.
+    [property: JsonProperty("jumps_from_here")]      int    JumpsFromHere = 0);
+
+/// <summary>One system where the player is a regular — enough visits
+/// accumulated that the broker can plausibly recognize their face.
+/// <see cref="RecentActivity"/>, when present, elevates the recognition
+/// from "seen you around" to "know what you've been up to" (the
+/// broker frames their pitch against the player's recent behavior).
+/// Omitted when the most-recent mission in this system is older than
+/// <see cref="RegionallyKnownBuilder.StaleActivityDaysThreshold"/>
+/// game-days — stale activity is no longer load-bearing signal.</summary>
+internal sealed record LlmRegionallyKnownEntry(
+    [property: JsonProperty("system")]               string  System,
+    [property: JsonProperty("visits")]               int     Visits,
+    [property: JsonProperty("last_visit_days_ago")]  int     LastVisitDaysAgo,
+    [property: JsonProperty("recent_activity", NullValueHandling = NullValueHandling.Ignore)]
+    string? RecentActivity);
 
 /// <summary>Live snapshot of the bar's other patrons — what else is
 /// "for sale" at this station right now, so the broker can reference

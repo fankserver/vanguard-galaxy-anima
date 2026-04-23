@@ -30,7 +30,8 @@ internal sealed class ContextGatherer
         LlmJournalSection? journal = null,
         LlmBarEcosystemSection? barEcosystem = null,
         LlmPurchaseProfileSection? purchaseProfile = null,
-        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
+        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null,
+        IReadOnlyList<LlmRegionallyKnownEntry>? regionallyKnown = null)
     {
         var ctx = new LlmContext
         {
@@ -111,6 +112,10 @@ internal sealed class ContextGatherer
             // should not emit a section the LLM can't act on anyway.
             AccessibleDestinations =
                 (accessibleDestinations is { Count: > 0 }) ? accessibleDestinations : null,
+            // Null-or-empty → omitted; prompt's regional-recognition rule
+            // only fires when at least one system qualifies.
+            RegionallyKnown =
+                (regionallyKnown is { Count: > 0 }) ? regionallyKnown : null,
         };
         // Final pass: derive mission guidance from the fully-populated context.
         // Must run last — reads every section.
