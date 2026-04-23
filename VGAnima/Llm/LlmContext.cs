@@ -57,6 +57,17 @@ internal sealed class LlmContext
     /// match player taste" loop.</summary>
     [JsonProperty("purchase_profile", NullValueHandling = NullValueHandling.Ignore)]
     public LlmPurchaseProfileSection? PurchaseProfile { get; set; }
+    /// <summary>Stations the LLM may pick for intents that need a target
+    /// (<c>deliver_to_station</c> / <c>haul_goods</c>). Built by
+    /// <see cref="AccessibleDestinationsBuilder"/>: 0-1 jumpgate hops from
+    /// the broker's system, capped at 8, ranked by (jumps asc,
+    /// same-faction-as-broker desc, name asc). LLM references by short
+    /// <c>dest_N</c> id; the real station GUID rides along (JsonIgnore) for
+    /// the factory to feed into <c>TravelToPOI.targetPOI</c>. Omitted
+    /// from the JSON when no destinations are reachable (pocket system).</summary>
+    [JsonProperty("accessible_destinations", NullValueHandling = NullValueHandling.Ignore)]
+    public IReadOnlyList<AccessibleDestination>? AccessibleDestinations { get; set; }
+
     [JsonProperty("story_arcs_active")] public IReadOnlyList<string> StoryArcsActive { get; set; } = null!;
     [JsonProperty("waypoints")]    public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = null!;
     [JsonProperty("time")]         public LlmTimeSection     Time         { get; set; } = null!;

@@ -29,7 +29,8 @@ internal sealed class ContextGatherer
         BrokerInfo broker,
         LlmJournalSection? journal = null,
         LlmBarEcosystemSection? barEcosystem = null,
-        LlmPurchaseProfileSection? purchaseProfile = null)
+        LlmPurchaseProfileSection? purchaseProfile = null,
+        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
         var ctx = new LlmContext
         {
@@ -106,6 +107,10 @@ internal sealed class ContextGatherer
             BarEcosystem = (barEcosystem is { OtherSalesmenHere: { Count: > 0 } })
                             ? barEcosystem : null,
             PurchaseProfile = purchaseProfile,
+            // Omit when empty — pocket systems with no reachable stations
+            // should not emit a section the LLM can't act on anyway.
+            AccessibleDestinations =
+                (accessibleDestinations is { Count: > 0 }) ? accessibleDestinations : null,
         };
         // Final pass: derive mission guidance from the fully-populated context.
         // Must run last — reads every section.

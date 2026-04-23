@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Source.Galaxy.POI;
 using Source.MissionSystem;
 using VGAnima.Llm;
@@ -96,10 +97,14 @@ internal sealed class LlmMissionAssigner
         // the broker is gone from the world. Nullable for back-compat
         // with callers that don't have the names handy (tests).
         string? brokerName  = null,
-        string? systemName  = null)
+        string? systemName  = null,
+        // Required whenever the block contains a deliver_to_station or
+        // haul_goods intent — factory resolves each DestinationShortId →
+        // the station's live GUID via this list.
+        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
         return AssignCore(block, missionLevel, brokerStation, brokerSeed, brokerStory,
-                          brokerName, systemName);
+                          brokerName, systemName, accessibleDestinations);
     }
 
     private string AssignCore(
@@ -109,10 +114,11 @@ internal sealed class LlmMissionAssigner
         string brokerSeed,
         LlmStory? brokerStory,
         string? brokerName = null,
-        string? systemName = null)
+        string? systemName = null,
+        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
         var mission = MissionFactoryFromJson.Build(
-            block, missionLevel, brokerStation, brokerSeed);
+            block, missionLevel, brokerStation, brokerSeed, accessibleDestinations);
 
         var storyId = mission.storyId;
         var entry = new StoryMissionRegistry(

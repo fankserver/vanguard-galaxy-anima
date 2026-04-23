@@ -371,7 +371,7 @@ public class ResponseValidatorTests
     // ---------- v2-mission schema dispatch ----------
 
     private const string ValidMissionPayload = @"{
-        ""schema"": ""vganima/mission/v1"",
+        ""schema"": ""vganima/mission/v2"",
         ""pitch"":    [""Line 1."", ""Line 2."", ""Line 3.""],
         ""check_in"": [""Any luck?""],
         ""payout"":   [""Good job."", ""Here's your cut.""],
@@ -409,7 +409,7 @@ public class ResponseValidatorTests
     public void Parse_V2Mission_MissingMissionField_Rejects()
     {
         const string payload = @"{
-            ""schema"": ""vganima/mission/v1"",
+            ""schema"": ""vganima/mission/v2"",
             ""pitch"":    [""a"",""b"",""c""],
             ""check_in"": [""d""],
             ""payout"":   [""e"",""f""] }";

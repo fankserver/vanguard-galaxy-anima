@@ -43,13 +43,6 @@ internal sealed class MissionBlockValidator
     internal const int CompletionTextSoftMaxLen = CompletionTextMaxLen * 9 / 10;  // 180
     internal const int ObjDescriptionSoftMaxLen = ObjDescriptionMaxLen * 9 / 10;  // 108
 
-    // Compat shim — v1's prompt still references this constant. v2 has no
-    // ProtectUnit/escort intent so it's semantically dead, but keeping it
-    // lets the BarRefreshPatches prompt compile through the schema
-    // rewrite without needing a coordinated edit in the same commit.
-    // Dropped once the prompt rewrite lands.
-    internal const int ProtectTextSoftMaxLen    = ObjDescriptionSoftMaxLen;
-
     private const int GatherRequiredMin   = 1;
     private const int GatherRequiredMax   = 50;
     private const int HaulRequiredMin     = 1;

@@ -7,7 +7,7 @@ namespace VGAnima.Llm;
 
 /// <summary>Strict parser + validator for LLM output. Dispatches on the
 /// <c>schema</c> field: <c>vganima/story/v1</c> produces a dialogue-only
-/// <see cref="LlmStory"/>, <c>vganima/mission/v1</c> additionally parses
+/// <see cref="LlmStory"/>, <c>vganima/mission/v2</c> additionally parses
 /// the <c>mission</c> sub-object via <see cref="MissionBlockValidator"/>.
 ///
 /// The dialogue rules (pitch / check_in / payout sizes + ASCII) are identical
@@ -25,7 +25,10 @@ namespace VGAnima.Llm;
 internal sealed class ResponseValidator
 {
     public const string ExpectedSchemaV1 = "vganima/story/v1";
-    public const string ExpectedSchemaV2 = "vganima/mission/v1";
+    // Bumped to v2 alongside the intent-based mission schema rewrite.
+    // Prompts or sidecars still referencing "vganima/mission/v1" are
+    // rejected — correct: their shape no longer matches the validator.
+    public const string ExpectedSchemaV2 = "vganima/mission/v2";
 
     // Dialogue line char budget — shared by pitch / check_in / payout.
     // Hard limit is enforced here; the soft limit (~10% under) is what
@@ -47,7 +50,7 @@ internal sealed class ResponseValidator
 
     /// <summary>Parse with no cross-context — hostile-faction rule and
     /// forbidden-archetype rule in the mission-block validator are
-    /// skipped. Used by tests and for the v1 dialogue-only path.</summary>
+    /// skipped. Used by tests and for the dialogue-only path.</summary>
     public LlmStory Parse(string rawContent)
         => Parse(rawContent, atWar: null, reputation: null, forbiddenArchetypes: null);
 
@@ -55,7 +58,8 @@ internal sealed class ResponseValidator
         string rawContent,
         IReadOnlyList<string>? atWar,
         IReadOnlyDictionary<string, int>? reputation,
-        IReadOnlyList<string>? forbiddenArchetypes = null)
+        IReadOnlyList<string>? forbiddenArchetypes = null,
+        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
         JToken root;
         try
@@ -111,7 +115,8 @@ internal sealed class ResponseValidator
                 missionTok,
                 atWar      ?? Array.Empty<string>(),
                 reputation ?? new Dictionary<string, int>(),
-                forbiddenArchetypes);
+                forbiddenArchetypes,
+                accessibleDestinations);
         }
 
         return new LlmStory(pitch, checkIn, payout, mission);
