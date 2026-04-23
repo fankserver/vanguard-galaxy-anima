@@ -118,14 +118,14 @@ internal static class JournalContextBuilder
 
             var jumpsAway = JumpsFor(r.StationId);
             if (jumpsAway == int.MaxValue) continue;   // unreachable
-            var ageDays = Math.Max(0, (currentGameSeconds - r.ResolvedGameSeconds) / 86400.0);
+            var ageDays  = Math.Max(0, (currentGameSeconds - r.ResolvedGameSeconds) / 86400.0);
+            var required = MagnitudeReachFormula.RequiredMagnitude(
+                jumpsAway, ageDays, sameFaction: true, fame: playerFame);
+            var included = r.MagnitudeScore >= required;
 
-            if (MagnitudeReachFormula.Reaches(
-                    r.MagnitudeScore, jumpsAway, ageDays,
-                    sameFaction: true, fame: playerFame))
-            {
-                network.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
-            }
+            LogReachDecision(r, jumpsAway, ageDays, required, included, "network");
+
+            if (included) network.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
         }
 
         var networkStoryIds = new HashSet<string>(network.Select(s => s.StoryId));
@@ -145,15 +145,15 @@ internal static class JournalContextBuilder
 
             var jumpsAway = JumpsFor(r.StationId);
             if (jumpsAway == int.MaxValue) continue;
-            var ageDays = Math.Max(0, (currentGameSeconds - r.ResolvedGameSeconds) / 86400.0);
+            var ageDays     = Math.Max(0, (currentGameSeconds - r.ResolvedGameSeconds) / 86400.0);
             var sameFaction = r.SourceFaction == factionIdentifier;
+            var required    = MagnitudeReachFormula.RequiredMagnitude(
+                jumpsAway, ageDays, sameFaction: sameFaction, fame: playerFame);
+            var included    = r.MagnitudeScore >= required;
 
-            if (MagnitudeReachFormula.Reaches(
-                    r.MagnitudeScore, jumpsAway, ageDays,
-                    sameFaction: sameFaction, fame: playerFame))
-            {
-                rumors.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
-            }
+            LogReachDecision(r, jumpsAway, ageDays, required, included, "rumors");
+
+            if (included) rumors.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
         }
 
         var active = BuildActiveWindow(inFlight, stationId, factionIdentifier);
@@ -215,6 +215,22 @@ internal static class JournalContextBuilder
         new(r.StoryId, r.MissionName, r.Archetype, r.Outcome, r.SourceFaction,
             r.StationName, r.SystemName, r.ResolvedGameSeconds, r.MagnitudeScore,
             JumpsFromHere: jumpsFromHere);
+
+    /// <summary>Tuning log for the reach formula. Emits one debug line
+    /// per record evaluated against a window so post-hoc analysis of a
+    /// session's prompts can explain why each mission did or didn't
+    /// surface. Plugin.Log is used directly rather than threaded
+    /// through as a dependency — the builder is already static, one
+    /// more static reference is fine for a log-only concern.</summary>
+    private static void LogReachDecision(
+        CompletedMissionRecord r, int jumpsAway, double ageDays,
+        int required, bool included, string window)
+    {
+        Plugin.Log?.LogDebug(
+            $"Reach[{window}]: '{r.MissionName}' ({r.Archetype} {r.SourceFaction}) " +
+            $"mag={r.MagnitudeScore} jumps={jumpsAway} age={ageDays:F1}d " +
+            $"req={required} {(included ? "IN" : "OUT")}");
+    }
 
     private static LlmJournalEntry InFlightSnapshot(PersistedEntry e)
     {

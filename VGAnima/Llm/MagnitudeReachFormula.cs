@@ -76,17 +76,23 @@ internal static class MagnitudeReachFormula
         return 0;
     }
 
+    /// <summary>Net magnitude the record must meet to reach the broker
+    /// — base-for-distance plus age penalty, minus same-faction and
+    /// fame bonuses. Exposed separately so callers that log per-entry
+    /// decisions (JournalContextBuilder's debug trace) can report the
+    /// required value without re-computing it.</summary>
+    public static int RequiredMagnitude(
+        int jumpsAway, double ageDays, bool sameFaction, int fame) =>
+        BaseMagnitudeForDistance(jumpsAway)
+        + AgePenalty(ageDays)
+        - (sameFaction ? SameFactionBonus : 0)
+        - FameBonus(fame);
+
     /// <summary>Verdict on whether a mission reaches the broker's ears.
-    /// True iff its magnitude meets the net required value after age,
-    /// faction, and fame modifiers.</summary>
+    /// True iff its magnitude meets
+    /// <see cref="RequiredMagnitude"/>.</summary>
     public static bool Reaches(
         int magnitude, int jumpsAway, double ageDays,
-        bool sameFaction, int fame)
-    {
-        var required = BaseMagnitudeForDistance(jumpsAway)
-                     + AgePenalty(ageDays)
-                     - (sameFaction ? SameFactionBonus : 0)
-                     - FameBonus(fame);
-        return magnitude >= required;
-    }
+        bool sameFaction, int fame) =>
+        magnitude >= RequiredMagnitude(jumpsAway, ageDays, sameFaction, fame);
 }

@@ -62,6 +62,29 @@ public class MagnitudeReachFormulaTests
         Assert.Equal(expected, MagnitudeReachFormula.FameBonus(fame));
     }
 
+    // ========= RequiredMagnitude =========
+    // Peer of Reaches exposing the net threshold so tuning-time debug
+    // logs don't re-compute.
+
+    [Fact]
+    public void RequiredMagnitude_MatchesReachesLogic()
+    {
+        // The contract: Reaches(mag, ...) == (mag >= RequiredMagnitude(...)).
+        // Sampling a handful of cases guards against the two drifting apart.
+        (int jumps, double age, bool faction, int fame)[] cases =
+        {
+            (1, 0, false, 0),
+            (5, 7, true, 5),
+            (12, 40, false, 15),
+        };
+        foreach (var (j, age, faction, fame) in cases)
+        {
+            var required = MagnitudeReachFormula.RequiredMagnitude(j, age, faction, fame);
+            Assert.True(MagnitudeReachFormula.Reaches(required,     j, age, faction, fame));
+            Assert.False(MagnitudeReachFormula.Reaches(required - 1, j, age, faction, fame));
+        }
+    }
+
     // ========= Reaches (composite) =========
 
     [Fact]
