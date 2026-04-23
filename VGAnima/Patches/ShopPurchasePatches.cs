@@ -71,9 +71,13 @@ internal static class ShopPurchasePatches
                     _                                => OtherShopCounter,
                 };
                 Register.AddCounter(counter, 1);
+                // `identifier` lives on ItemBuilder, not on InventoryItemType
+                // itself — same indirection BarPurchasePatches uses
+                // (salesman.itemForSale.itemBuilder.identifier). Without the
+                // itemBuilder hop the log prints `?` even on successful buys.
+                var id = item.item?.itemBuilder?.identifier ?? "?";
                 Plugin.Log.LogDebug(
-                    $"ShopPurchase: {counter}++ (facility={shop.facility}, " +
-                    $"item={item.item?.identifier ?? "?"})");
+                    $"ShopPurchase: {counter}++ (facility={shop.facility}, item={id})");
             }
             catch (Exception ex)
             {
