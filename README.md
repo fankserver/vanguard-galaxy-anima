@@ -146,14 +146,15 @@ Successful parses also emit the full prompt/response dump at Debug level so you 
 ## Docs
 
 - [`docs/vanilla-reference.md`](docs/vanilla-reference.md) — mechanics knowhow (reward formulas, faction model, POI lifecycle, procedural generator multipliers, clamp rationale). Standalone reference, no decompile paths required.
-- [`docs/superpowers/specs/`](docs/superpowers/specs/) — versioned design specs.
-- [`docs/superpowers/plans/`](docs/superpowers/plans/) — step-by-step implementation plans, one per milestone.
+- [`docs/vanguard-galaxy-decomp-survey.md`](docs/vanguard-galaxy-decomp-survey.md) — catalog of canonical identifiers drawn from the decompiled `Assembly-CSharp.dll` (factions, reputation thresholds, mission type IDs).
+- [`docs/vanguard-galaxy-wiki-survey.md`](docs/vanguard-galaxy-wiki-survey.md) — display-name + lore counterpart to the decomp survey.
+- [`docs/vanguard-galaxy-bar-ecosystem-survey.md`](docs/vanguard-galaxy-bar-ecosystem-survey.md) — bar patron + salesman types.
 
 ## Roadmap
 
 Shipped milestones:
 - **v2-mission** — full-mission authoring with `vganima/mission/v1` schema, ClearPoi combat POIs, ranked archetype scoring, hardpoint-based capability signals, faction identifier/display-name split.
-- **Persistence** — pair-named sidecar per vanilla save; offered + accepted brokers survive rotation and restart; locked-down `TypeNameHandling` allowlist; corrupt/missing sidecars fail soft via placeholder mission. See `docs/superpowers/specs/2026-04-21-mission-persistence-design.md`.
+- **Persistence** — pair-named sidecar per vanilla save; offered + accepted brokers survive rotation and restart; locked-down `TypeNameHandling` allowlist; corrupt/missing sidecars fail soft via placeholder mission.
 - **Intent refactor (`vganima/mission/v2`)** — LLM authors narrative via a closed intent vocabulary (7 intents), plugin owns all mechanical shapes (POI spawns, ship compositions, objective types). Combat encounters support 6 flavors (scouting / outpost / lair / raid / cornered_remnants / swarm) with distinct narrative shapes. Purchase-profile signal tracks bar-salesman + commodity-shop purchases so brokers can tune rewards to player taste.
 - **Bar ecosystem awareness** — broker sees the other salesmen at the same bar and can reference them organically; LLM-injected brokers are filtered out of their own view.
 - **Accessible destinations** — `deliver_to_station` / `haul_goods` intents pick from a plugin-provided list of reachable stations, validated against the current jumpgate graph.
