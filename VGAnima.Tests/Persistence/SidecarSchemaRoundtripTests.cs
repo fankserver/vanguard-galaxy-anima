@@ -74,6 +74,55 @@ public class SidecarSchemaRoundtripTests
         Assert.Contains("\"entries\":[]", json);
     }
 
+    [Fact]
+    public void Roundtrip_PreservesVisitedSystems()
+    {
+        var schema = new SidecarSchema(
+            Version: SidecarSchema.CurrentVersion,
+            Entries: System.Array.Empty<PersistedEntry>(),
+            VisitedSystems: new[]
+            {
+                new VisitedSystem(
+                    Guid:                  "sys-zoran-guid",
+                    Name:                  "Zoran",
+                    VisitCount:            12,
+                    FirstVisitGameSeconds: 100.0,
+                    LastVisitGameSeconds:  86400.0),
+                new VisitedSystem(
+                    Guid:                  "sys-hermetis-guid",
+                    Name:                  "Hermetis",
+                    VisitCount:            1,
+                    FirstVisitGameSeconds: 0.0,
+                    LastVisitGameSeconds:  0.0),
+            });
+
+        var json = JsonConvert.SerializeObject(schema, SidecarSchema.SerializerSettings);
+        var parsed = JsonConvert.DeserializeObject<SidecarSchema>(
+            json, SidecarSchema.SerializerSettings)!;
+
+        Assert.NotNull(parsed.VisitedSystems);
+        Assert.Equal(2, parsed.VisitedSystems!.Length);
+        var zoran = System.Array.Find(parsed.VisitedSystems, v => v.Guid == "sys-zoran-guid");
+        Assert.NotNull(zoran);
+        Assert.Equal("Zoran", zoran!.Name);
+        Assert.Equal(12, zoran.VisitCount);
+        Assert.Equal(100.0, zoran.FirstVisitGameSeconds);
+        Assert.Equal(86400.0, zoran.LastVisitGameSeconds);
+    }
+
+    [Fact]
+    public void Serializes_OmitsVisitedSystemsKey_WhenNull()
+    {
+        // Parallels the CompletedMissions null-omission contract — keeps
+        // pre-travel sidecars byte-minimal.
+        var schema = new SidecarSchema(
+            Version: SidecarSchema.CurrentVersion,
+            Entries: System.Array.Empty<PersistedEntry>(),
+            VisitedSystems: null);
+        var json = JsonConvert.SerializeObject(schema, SidecarSchema.SerializerSettings);
+        Assert.DoesNotContain("\"visited_systems\"", json);
+    }
+
     // Regression for a real bug hit during live E2E: LlmMissionBlocks that
     // came through JSON deserialization (the production path — vanilla LLM
     // response → JsonConvert.DeserializeObject<LlmMissionBlock>) populate

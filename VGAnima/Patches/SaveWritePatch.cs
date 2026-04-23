@@ -45,18 +45,21 @@ internal static class SaveWritePatch
             var sidecarPath = SidecarPathResolver.From(savePath);
             var entries     = System.Linq.Enumerable.ToArray(Registry.All());
             var completed   = System.Linq.Enumerable.ToArray(Registry.CompletedMissions);
-            // Emit null when the journal is empty so the field disappears
-            // from disk entirely — keeps pre-journal sidecar shapes
-            // byte-identical for users who never resolve a mission.
+            var visited     = System.Linq.Enumerable.ToArray(Registry.VisitedSystems.Values);
+            // Emit null when a collection is empty so the field disappears
+            // from disk entirely — keeps early-game sidecar shapes compact
+            // and byte-identical for users who haven't yet triggered a
+            // given subsystem (no mission resolved / no system visited).
             var schema      = new SidecarSchema(
                 Version:           SidecarSchema.CurrentVersion,
                 Entries:           entries,
-                CompletedMissions: completed.Length == 0 ? null : completed);
+                CompletedMissions: completed.Length == 0 ? null : completed,
+                VisitedSystems:    visited.Length   == 0 ? null : visited);
             Io.Write(sidecarPath, schema);
             LastKnownSavePath = savePath;
             Log?.LogInfo(
                 $"Flushed {entries.Length} broker entr{(entries.Length == 1 ? "y" : "ies")} + " +
-                $"{completed.Length} completed to {sidecarPath}");
+                $"{completed.Length} completed + {visited.Length} visited to {sidecarPath}");
         }
         catch (Exception e)
         {

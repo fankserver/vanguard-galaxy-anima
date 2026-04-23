@@ -28,12 +28,18 @@ internal sealed class PersistedBrokerRegistry
     // Rolling log of resolved (completed / failed / abandoned) missions,
     // ordered oldest-first. Capped at MaxCompletedMissions.
     private readonly List<CompletedMissionRecord>       _completedLog = new();
+    // Per-system visit tallies keyed by SystemMapData.guid. Mutated by
+    // SystemEntryPatch on every jumpgate arrival. Unbounded — the galaxy
+    // has O(100) systems so storage is trivial, and dropping entries
+    // would invalidate regional-recognition signals.
+    private readonly Dictionary<string, VisitedSystem>  _visitedSystems = new();
 
     public void Clear()
     {
         _byStoryId.Clear();
         _storyIdBySeed.Clear();
         _completedLog.Clear();
+        _visitedSystems.Clear();
     }
 
     public void LoadFrom(IEnumerable<PersistedEntry> entries)
@@ -115,4 +121,52 @@ internal sealed class PersistedBrokerRegistry
     /// window as needed (recent-first is more natural for "last N events"
     /// slicing).</summary>
     public IReadOnlyList<CompletedMissionRecord> CompletedMissions => _completedLog;
+
+    /// <summary>Replaces the visited-systems map wholesale. Called by
+    /// <c>SaveLoadPatch</c> after deserializing a sidecar. Records on a
+    /// freshly-upgraded v2 sidecar arrive as null — treated as an empty
+    /// map, identical to a brand-new save.</summary>
+    public void LoadVisitedSystems(IEnumerable<VisitedSystem>? records)
+    {
+        _visitedSystems.Clear();
+        if (records == null) return;
+        foreach (var r in records) _visitedSystems[r.Guid] = r;
+    }
+
+    /// <summary>Records one arrival at the named system. First visit
+    /// creates the entry with both timestamps equal to
+    /// <paramref name="gameSeconds"/>; subsequent visits increment the
+    /// counter and update <c>LastVisitGameSeconds</c> only. Callers (the
+    /// Harmony patch) are responsible for the transition-latching; this
+    /// method trusts that every invocation is a genuine new arrival.
+    /// <para>Snapshotting the display name on every visit (not just the
+    /// first) lets a later rename propagate — cheap robustness since the
+    /// write is already happening.</para></summary>
+    public void NoteSystemVisit(string guid, string name, double gameSeconds)
+    {
+        if (_visitedSystems.TryGetValue(guid, out var existing))
+        {
+            _visitedSystems[guid] = existing with
+            {
+                Name                 = name,
+                VisitCount           = existing.VisitCount + 1,
+                LastVisitGameSeconds = gameSeconds,
+            };
+        }
+        else
+        {
+            _visitedSystems[guid] = new VisitedSystem(
+                Guid:                  guid,
+                Name:                  name,
+                VisitCount:            1,
+                FirstVisitGameSeconds: gameSeconds,
+                LastVisitGameSeconds:  gameSeconds);
+        }
+    }
+
+    /// <summary>Read-only view over the visited-systems map.
+    /// <c>RegionallyKnownBuilder</c> consumes it to produce the LLM's
+    /// regional-recognition signal; <c>SaveWritePatch</c> materializes it
+    /// into <see cref="SidecarSchema.VisitedSystems"/>.</summary>
+    public IReadOnlyDictionary<string, VisitedSystem> VisitedSystems => _visitedSystems;
 }

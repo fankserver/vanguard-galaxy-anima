@@ -3,38 +3,47 @@ using Newtonsoft.Json;
 namespace VGAnima.Persistence;
 
 /// <summary>Top-level schema of a <c>&lt;save&gt;.vganima.json</c> sidecar.
-/// Version 2 is the current shape (intent-based mission records). v1
-/// sidecars — with <c>LlmKillEnemies</c> / <c>LlmClearPoi</c> /
-/// <c>LlmCollectItemTypes</c> / <c>LlmProtectUnit</c> / <c>LlmTriggerObjective</c>
-/// <c>$type</c> refs — are rejected here (version mismatch) or at the
-/// binder (deleted types); both paths quarantine the file via
-/// <see cref="SidecarIO"/> and let the game continue with an empty
-/// VGAnima registry. In-flight v1 broker missions appear as orphans on
-/// first v2 load; vanilla archives the zero-step
-/// <see cref="VGAnima.Missions.PlaceholderMission"/> on the next tick.
+/// Version 3 is the current shape: intent-based mission records plus the
+/// visited-systems map that drives the "regionally known" signal.
 ///
-/// <para>The <c>Entries</c> property is typed as <c>PersistedEntry[]</c>
-/// rather than <c>IReadOnlyList&lt;PersistedEntry&gt;</c> so its declared
-/// type matches its runtime type — under
-/// <see cref="SerializerSettings"/>' <c>TypeNameHandling.Auto</c>, any
-/// interface-typed collection would emit a top-level <c>$type</c>
-/// discriminator on the <c>entries</c> field, which we don't want for the
-/// schema's public shape.</para></summary>
+/// <para>Version history:
+/// <list type="bullet">
+///   <item><b>v1</b>: original objective-typed mission records
+///     (<c>LlmKillEnemies</c> / <c>LlmClearPoi</c> / <c>LlmCollectItemTypes</c>
+///     / <c>LlmProtectUnit</c> / <c>LlmTriggerObjective</c>). <b>Hard cut</b> —
+///     v1 sidecars quarantine at the binder because the types no longer exist.</item>
+///   <item><b>v2</b>: intent-based mission records. Still readable — see
+///     <see cref="SidecarIO.Read"/>, which upgrades v2 to v3 in memory by
+///     defaulting <see cref="VisitedSystems"/> to null. The upgraded
+///     schema is written back as v3 on the next save.</item>
+///   <item><b>v3</b>: adds <see cref="VisitedSystems"/>. Purely additive —
+///     no behavior change for existing broker / journal state.</item>
+/// </list></para>
+///
+/// <para>The array-typed collection properties (<c>Entries</c>,
+/// <c>CompletedMissions</c>, <c>VisitedSystems</c>) keep their declared
+/// types matching their runtime types so
+/// <see cref="SerializerSettings"/>' <see cref="Newtonsoft.Json.TypeNameHandling.Auto"/>
+/// doesn't emit a top-level <c>$type</c> discriminator on the field. An
+/// interface-typed collection (<c>IReadOnlyList&lt;T&gt;</c>) would bloat
+/// the wire shape for no benefit.</para></summary>
 internal sealed record SidecarSchema(
     [property: JsonProperty("version")] int Version,
     [property: JsonProperty("entries")] PersistedEntry[] Entries,
-    // Additive v1 field that survives into v2 unchanged — completed
+    // Additive v1 field that survives into v2/v3 unchanged — completed
     // missions are archetype-string + metadata, no LLM-objective type
     // names, so the v1 → v2 break doesn't touch them.
     [property: JsonProperty("completed_missions", NullValueHandling = NullValueHandling.Ignore)]
-    CompletedMissionRecord[]? CompletedMissions = null)
+    CompletedMissionRecord[]? CompletedMissions = null,
+    // Added in v3. Primitive-typed records only, so no binder allowlist
+    // changes required. Null/empty for players who haven't traveled yet
+    // or for freshly-upgraded v2 sidecars.
+    [property: JsonProperty("visited_systems", NullValueHandling = NullValueHandling.Ignore)]
+    VisitedSystem[]? VisitedSystems = null)
 {
-    // v1 → v2 bump: v1 sidecars have `$type` refs to deleted objective
-    // types (LlmKillEnemies etc.). Version check in SidecarIO.Read
-    // triggers `UnsupportedVersion` quarantine before the binder has
-    // to reject those types. Either path ends in quarantine — clean
-    // break, no migration, no in-flight broker survives.
-    public const int CurrentVersion = 2;
+    // v2 → v3 bump: added VisitedSystems. Additive-only; old data
+    // roundtrips. SidecarIO.Read accepts v2 and upgrades in memory.
+    public const int CurrentVersion = 3;
 
     /// <summary>Shared Newtonsoft settings for read/write of sidecar JSON.
     /// <para><c>TypeNameHandling.Auto</c> is required because

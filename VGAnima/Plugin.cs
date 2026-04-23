@@ -132,6 +132,7 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(MissionLifecyclePatches.OnCompletePatch));
         _harmony.PatchAll(typeof(MissionLifecyclePatches.OnFailPatch));
         _harmony.PatchAll(typeof(MissionLifecyclePatches.OnArchivePatch));
+        _harmony.PatchAll(typeof(SystemEntryPatch));
 
         // Wire persistence singletons into Harmony patches (all four use the
         // same PersistedBrokerRegistry + SidecarIO instances).
@@ -149,6 +150,10 @@ public class Plugin : BaseUnityPlugin
 
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
+
+        SystemEntryPatch.Registry                  = PersistedRegistry;
+        SystemEntryPatch.Clock                     = Clock;
+        SystemEntryPatch.Log                       = Log;
 
         // Dead-sidecar startup sweep: delete sidecars whose vanilla save file
         // was removed outside the game. Bounded by save-directory size; runs
@@ -183,11 +188,13 @@ public class Plugin : BaseUnityPlugin
             var sidecarPath = SidecarPathResolver.From(path);
             var entries     = System.Linq.Enumerable.ToArray(PersistedRegistry.All());
             var completed   = System.Linq.Enumerable.ToArray(PersistedRegistry.CompletedMissions);
+            var visited     = System.Linq.Enumerable.ToArray(PersistedRegistry.VisitedSystems.Values);
             SidecarIO.Write(sidecarPath, new SidecarSchema(
                 Version:           SidecarSchema.CurrentVersion,
                 Entries:           entries,
-                CompletedMissions: completed.Length == 0 ? null : completed));
-            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {completed.Length} completed to {sidecarPath}");
+                CompletedMissions: completed.Length == 0 ? null : completed,
+                VisitedSystems:    visited.Length   == 0 ? null : visited));
+            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {completed.Length} completed + {visited.Length} visited to {sidecarPath}");
         }
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
     }

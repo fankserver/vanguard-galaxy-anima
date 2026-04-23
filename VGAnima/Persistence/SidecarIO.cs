@@ -37,10 +37,23 @@ internal sealed class SidecarIO
         catch (JsonException) { return Quarantine(sidecarPath, SidecarReadStatus.Corrupted); }
 
         if (schema is null) return Quarantine(sidecarPath, SidecarReadStatus.Corrupted);
-        if (schema.Version != SidecarSchema.CurrentVersion)
-            return Quarantine(sidecarPath, SidecarReadStatus.UnsupportedVersion);
 
-        return new SidecarReadResult(SidecarReadStatus.Loaded, schema, null);
+        // Version acceptance policy: the current version loads as-is.
+        // One version back (additive schema change only) loads via an
+        // in-memory upgrade that re-stamps the version field so downstream
+        // code sees the current shape. Anything older or newer
+        // quarantines. v2 → v3 is the one live upgrade path: v3 added
+        // `visited_systems` — a v2 sidecar has no such field, so it
+        // deserializes with `VisitedSystems = null` and we just bump the
+        // version number. The file gets rewritten as v3 on the next save.
+        if (schema.Version == SidecarSchema.CurrentVersion)
+            return new SidecarReadResult(SidecarReadStatus.Loaded, schema, null);
+        if (schema.Version == SidecarSchema.CurrentVersion - 1)
+            return new SidecarReadResult(
+                SidecarReadStatus.Loaded,
+                schema with { Version = SidecarSchema.CurrentVersion },
+                null);
+        return Quarantine(sidecarPath, SidecarReadStatus.UnsupportedVersion);
     }
 
     public void Write(string sidecarPath, SidecarSchema schema)

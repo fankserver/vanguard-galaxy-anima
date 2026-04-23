@@ -59,6 +59,102 @@ public class PersistedBrokerRegistryTests
     }
 
     [Fact]
+    public void NoteSystemVisit_FirstVisit_CreatesEntryWithBothTimestampsEqual()
+    {
+        var reg = new PersistedBrokerRegistry();
+
+        reg.NoteSystemVisit(guid: "sys-a", name: "Alpha", gameSeconds: 500.0);
+
+        Assert.Single(reg.VisitedSystems);
+        var entry = reg.VisitedSystems["sys-a"];
+        Assert.Equal("Alpha", entry.Name);
+        Assert.Equal(1, entry.VisitCount);
+        Assert.Equal(500.0, entry.FirstVisitGameSeconds);
+        Assert.Equal(500.0, entry.LastVisitGameSeconds);
+    }
+
+    [Fact]
+    public void NoteSystemVisit_SubsequentVisit_IncrementsCountAndUpdatesLastVisitOnly()
+    {
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit(guid: "sys-a", name: "Alpha", gameSeconds: 500.0);
+
+        reg.NoteSystemVisit(guid: "sys-a", name: "Alpha", gameSeconds: 900.0);
+
+        var entry = reg.VisitedSystems["sys-a"];
+        Assert.Equal(2, entry.VisitCount);
+        Assert.Equal(500.0, entry.FirstVisitGameSeconds);  // unchanged
+        Assert.Equal(900.0, entry.LastVisitGameSeconds);
+    }
+
+    [Fact]
+    public void NoteSystemVisit_DistinctGuids_TrackedSeparately()
+    {
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit("sys-a", "Alpha", 100.0);
+        reg.NoteSystemVisit("sys-b", "Beta",  200.0);
+        reg.NoteSystemVisit("sys-a", "Alpha", 300.0);
+
+        Assert.Equal(2, reg.VisitedSystems["sys-a"].VisitCount);
+        Assert.Equal(1, reg.VisitedSystems["sys-b"].VisitCount);
+    }
+
+    // Protects the "procedural rename propagates" contract — if a system's
+    // display name changes (localization, late-game lore event), the most
+    // recent visit writes the new name while preserving history.
+    [Fact]
+    public void NoteSystemVisit_PropagatesNameChange()
+    {
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit("sys-a", "Alpha", 100.0);
+
+        reg.NoteSystemVisit("sys-a", "Alpha Prime", 200.0);
+
+        Assert.Equal("Alpha Prime", reg.VisitedSystems["sys-a"].Name);
+    }
+
+    [Fact]
+    public void LoadVisitedSystems_ReplacesWholesale()
+    {
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit("sys-x", "X", 10.0);
+
+        reg.LoadVisitedSystems(new[]
+        {
+            new VisitedSystem(Guid: "sys-a", Name: "Alpha", VisitCount: 5,
+                FirstVisitGameSeconds: 0, LastVisitGameSeconds: 100),
+        });
+
+        Assert.Single(reg.VisitedSystems);
+        Assert.True(reg.VisitedSystems.ContainsKey("sys-a"));
+        Assert.False(reg.VisitedSystems.ContainsKey("sys-x"));
+    }
+
+    [Fact]
+    public void LoadVisitedSystems_NullInput_ClearsMap()
+    {
+        // Called this way by SaveLoadPatch when a v2 sidecar upgrades to
+        // v3 — VisitedSystems arrives as null, must produce empty state.
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit("sys-x", "X", 10.0);
+
+        reg.LoadVisitedSystems(null);
+
+        Assert.Empty(reg.VisitedSystems);
+    }
+
+    [Fact]
+    public void Clear_AlsoWipesVisitedSystems()
+    {
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit("sys-a", "Alpha", 100.0);
+
+        reg.Clear();
+
+        Assert.Empty(reg.VisitedSystems);
+    }
+
+    [Fact]
     public void MarkAccepted_TransitionsStateFromOfferedToAccepted()
     {
         var reg = new PersistedBrokerRegistry();

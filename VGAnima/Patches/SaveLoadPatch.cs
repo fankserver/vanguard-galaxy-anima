@@ -87,10 +87,17 @@ internal static class SaveLoadPatch
                     // null, which LoadCompletedMissions treats as "empty
                     // log." Both shapes produce the same outcome.
                     Registry.LoadCompletedMissions(result.Schema.CompletedMissions);
+                    // Visited-systems field is nullable (additive v3
+                    // addition). v2 sidecars upgrade in SidecarIO and
+                    // arrive here with null; LoadVisitedSystems treats
+                    // null as "empty map," so upgrade players start with
+                    // no regional recognition until they travel.
+                    Registry.LoadVisitedSystems(result.Schema.VisitedSystems);
                     var completedCount = result.Schema.CompletedMissions?.Length ?? 0;
+                    var visitedCount   = result.Schema.VisitedSystems?.Length   ?? 0;
                     Log?.LogInfo(
                         $"Loaded {result.Schema.Entries.Length} broker entr{(result.Schema.Entries.Length == 1 ? "y" : "ies")} + " +
-                        $"{completedCount} completed from {sidecarPath}");
+                        $"{completedCount} completed + {visitedCount} visited from {sidecarPath}");
                     break;
                 case SidecarReadStatus.MissingFile:
                     Log?.LogInfo($"No sidecar at {sidecarPath} — starting with empty registry");
@@ -119,6 +126,12 @@ internal static class SaveLoadPatch
 
             LastKnownSavePath   = savePath;
             OrphanPurgePending  = true;
+            // Reset the system-entry latch so the first jumpgate travel
+            // after load always records, regardless of whichever system
+            // the prior session was parked in. Without this, loading a
+            // save where the player is already in X and then jumpgating
+            // to X would skip (latch still says X from a different slot).
+            SystemEntryPatch.ResetLatch();
         }
         catch (Exception e)
         {

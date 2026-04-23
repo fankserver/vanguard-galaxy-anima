@@ -50,6 +50,84 @@ public class SidecarIOTests : IDisposable
         Assert.False(File.Exists(path));
     }
 
+    // Anything older than one-back quarantines too — v1 stays a hard cut.
+    // v1 sidecars have $type refs to deleted objective types; even if
+    // someone hand-edited the version number, the binder would still
+    // reject the payload.
+    [Fact]
+    public void Read_MuchOlderVersion_Quarantines()
+    {
+        var path = Path.Combine(_tempDir, "v1.vganima.json");
+        File.WriteAllText(path, "{\"version\":1,\"entries\":[]}");
+        var io = new SidecarIO(() => new DateTime(2026, 04, 21, 12, 00, 00, DateTimeKind.Utc));
+
+        var result = io.Read(path);
+
+        Assert.Equal(SidecarReadStatus.UnsupportedVersion, result.Status);
+        Assert.False(File.Exists(path));
+    }
+
+    // v3 added the optional `visited_systems` field; v2 sidecars deserialize
+    // cleanly (the field reads as null) and should upgrade in memory without
+    // quarantine. Downstream consumers expect Version == CurrentVersion on
+    // the returned schema; a mismatched version number would confuse the
+    // SaveWritePatch flush that immediately follows.
+    [Fact]
+    public void Read_PreviousVersion_UpgradesInMemoryToCurrentVersion()
+    {
+        var path = Path.Combine(_tempDir, "v2.vganima.json");
+        File.WriteAllText(path, $"{{\"version\":{SidecarSchema.CurrentVersion - 1},\"entries\":[]}}");
+        var io = new SidecarIO(() => new DateTime(2026, 04, 21, 12, 00, 00, DateTimeKind.Utc));
+
+        var result = io.Read(path);
+
+        Assert.Equal(SidecarReadStatus.Loaded, result.Status);
+        Assert.NotNull(result.Schema);
+        Assert.Equal(SidecarSchema.CurrentVersion, result.Schema!.Version);
+        Assert.Null(result.Schema.VisitedSystems);
+        // File stays untouched — no quarantine, no rewrite. The rewrite
+        // happens on the next SaveWritePatch flush, not during Read.
+        Assert.True(File.Exists(path));
+    }
+
+    // The upgrade accepts existing v2 payloads (entries + completed
+    // missions) intact — the version bump is metadata-only.
+    [Fact]
+    public void Read_PreviousVersion_PreservesExistingFields()
+    {
+        var path = Path.Combine(_tempDir, "v2-populated.vganima.json");
+        File.WriteAllText(path, $$"""
+            {
+              "version": {{SidecarSchema.CurrentVersion - 1}},
+              "entries": [],
+              "completed_missions": [{
+                "storyId": "vganima.llm.test",
+                "brokerName": "Test Broker",
+                "stationId": "station-x",
+                "stationName": "Testing Hub",
+                "sourceFaction": "TradingGuild",
+                "missionName": "Legacy Contract",
+                "archetype": "deliver",
+                "outcome": "completed",
+                "missionLevel": 7,
+                "systemName": "Zoran",
+                "magnitudeScore": 4,
+                "resolvedGameSeconds": 1234.5,
+                "resolvedRealUtc": "2026-04-21T10:00:00Z"
+              }]
+            }
+            """);
+        var io = new SidecarIO(() => DateTime.UtcNow);
+
+        var result = io.Read(path);
+
+        Assert.Equal(SidecarReadStatus.Loaded, result.Status);
+        Assert.Equal(SidecarSchema.CurrentVersion, result.Schema!.Version);
+        Assert.NotNull(result.Schema.CompletedMissions);
+        Assert.Single(result.Schema.CompletedMissions!);
+        Assert.Equal("Legacy Contract", result.Schema.CompletedMissions![0].MissionName);
+    }
+
     [Fact]
     public void Write_ThenRead_RoundtripsSchema()
     {
