@@ -228,10 +228,13 @@ internal static class MissionFactoryFromJson
 
         switch (intent.Flavor)
         {
-            case CombatFlavorWhitelist.Scouting: SpawnScoutingFleet(combat, enemyFaction); break;
-            case CombatFlavorWhitelist.Outpost:  SpawnOutpostFleet (combat, enemyFaction); break;
-            case CombatFlavorWhitelist.Lair:     SpawnLairFleet    (combat, enemyFaction); break;
-            default:                             SpawnBalancedFleet(combat, enemyFaction, missionLevel); break;
+            case CombatFlavorWhitelist.Scouting:         SpawnScoutingFleet(combat, enemyFaction);         break;
+            case CombatFlavorWhitelist.Outpost:          SpawnOutpostFleet (combat, enemyFaction);         break;
+            case CombatFlavorWhitelist.Lair:             SpawnLairFleet    (combat, enemyFaction);         break;
+            case CombatFlavorWhitelist.Raid:             SpawnRaidFleet    (combat, enemyFaction);         break;
+            case CombatFlavorWhitelist.CorneredRemnants: SpawnCorneredRemnantsFleet(combat, enemyFaction); break;
+            case CombatFlavorWhitelist.Swarm:            SpawnSwarmFleet   (combat, enemyFaction);         break;
+            default:                                     SpawnBalancedFleet(combat, enemyFaction, missionLevel); break;
         }
 
         step.dynamicPointOfInterest = combat;
@@ -331,6 +334,68 @@ internal static class MissionFactoryFromJson
                 pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
                 minUnits: 2, maxUnits: 2),
             spawnDelay: 45f);
+    }
+
+    /// <summary>"A Marauder warband hunting the lane." Uniform mobile
+    /// pack, no command hierarchy. Initial 5 medium = the pack itself.
+    /// Fast wave (+15s) 3 small = tail of the pack catching up. NO slow
+    /// wave — they're nomadic, nobody to call. Shorter engagement than
+    /// the static-position flavors; fleet is cohesive equals rather
+    /// than commander+escorts.</summary>
+    private static void SpawnRaidFleet(MapPointOfInterest combat, Faction enemy)
+    {
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: MediumScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 5, maxUnits: 5));
+
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 3, maxUnits: 3),
+            spawnDelay: 15f);
+    }
+
+    /// <summary>"They're cornered — finish them." Everyone they have is
+    /// already here; no reinforcements possible. t=0 2 big (staggered
+    /// to avoid wall-of-fire instakill). +5s 4 small = rest of their
+    /// garrison. NO further waves — the "remnants" in the name is
+    /// load-bearing: there's nobody left to summon. Peak threat is
+    /// front-loaded; engagement trends down as the player attrits.</summary>
+    private static void SpawnCorneredRemnantsFleet(MapPointOfInterest combat, Faction enemy)
+    {
+        // Big ships spawn immediately — as guards, they're present on
+        // player arrival.
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: BigScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 2, maxUnits: 2));
+
+        // Small ships follow 5s after arrival via triggered spawn —
+        // the "stagger" qwen flagged as necessary to avoid a single
+        // overwhelming wave. Narratively: the small escorts scramble
+        // out to the big ships after the player arrives.
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 4, maxUnits: 4),
+            spawnDelay: 5f);
+    }
+
+    /// <summary>"A drone swarm" / "disposable Fanatic zealots." Quantity
+    /// over quality — no big ships, just a cloud of cheap threats.
+    /// Initial 5 small. Fast wave (+15s) 3 small. Capped at 8 total
+    /// per qwen's note about Unity pathfinding stutter on large mob
+    /// counts. Individually trivial; dangerous in aggregate.</summary>
+    private static void SpawnSwarmFleet(MapPointOfInterest combat, Faction enemy)
+    {
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+            minUnits: 5, maxUnits: 5));
+
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: SmallScale, gType: GameplayType.Combat, f: enemy,
+                minUnits: 3, maxUnits: 3),
+            spawnDelay: 15f);
     }
 
     /// <summary>Unified builder for gather_ore / gather_salvage and their

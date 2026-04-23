@@ -737,35 +737,59 @@ internal static class BarRefreshPatches
             "objectives + POI combo that implements the narrative shape):\n" +
             "  { \"intent\": \"clear_combat_site\",\n" +
             "    \"enemy_faction\":   <hostile faction from list above>,\n" +
-            "    \"flavor\":          one of [scouting, outpost, lair] (OPTIONAL),\n" +
+            "    \"flavor\":          one of [scouting, outpost, lair, raid,\n" +
+            "                                cornered_remnants, swarm] (OPTIONAL),\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
             "      Plugin spawns a Combat POI with enemy guards in the broker's\n" +
             "      system. Step completes when the zone is cleared. Use for\n" +
             "      \"go fight at a specific place\" missions.\n" +
-            "      flavor (optional) picks a narrative composition — plugin owns\n" +
-            "      the fleet, but flavor determines its shape AND the\n" +
-            "      reinforcement beats. Match the flavor to your pitch:\n" +
-            "        * scouting: initial 2 small + 1 medium, fast wave (15s)\n" +
-            "          2 small, slow wave (45s) 1 big. Reads as \"patrol sighted,\n" +
-            "          called for backup, then a heavy responded.\" Pitch should\n" +
-            "          say \"we spotted a patrol\" / \"scouts are circling\" /\n" +
-            "          \"they saw our convoy and called home\".\n" +
-            "        * outpost: initial 1 big + 4 small, fast wave (20s) 4 small,\n" +
-            "          slow wave (60s) 2 big. A dug-in garrison — command ship\n" +
-            "          and escorts, perimeter patrols closing in, then HQ\n" +
-            "          reserves. Pitch should say \"they've fortified\" /\n" +
-            "          \"an outpost\" / \"a dug-in position\" / \"they are\n" +
-            "          occupying\".\n" +
-            "        * lair: initial 3 big, fast wave (15s) 3 small, slow wave\n" +
-            "          (45s) 2 big. A hidden ambush — heavy up front, perimeter\n" +
-            "          scouts racing back, then reserves from another hideout.\n" +
-            "          Pitch should say \"hidden base\" / \"a lair\" / \"an ambush\"\n" +
-            "          / \"they're using the wreck as a base\".\n" +
-            "      Omit flavor for a balanced 3-5 ship engagement with a single\n" +
-            "      2-3 ship reinforcement wave (the default). Pick a flavor ONLY\n" +
-            "      when your pitch genuinely fits one of the three shapes —\n" +
-            "      a mismatched flavor (e.g. \"lair\" on a patrol pitch) creates\n" +
-            "      narrative dissonance for the player.\n" +
+            "      flavor (optional) picks a narrative composition. Plugin owns\n" +
+            "      exact ship counts and reinforcement timing; the flavor just\n" +
+            "      picks the narrative SHAPE. Match flavor to pitch:\n" +
+            "        * scouting: patrol sighted, called for backup, heavy\n" +
+            "          responds. Init 2 small + 1 medium; +15s 2 small; +45s\n" +
+            "          1 big. Pitch: \"a patrol spotted us\", \"scouts are\n" +
+            "          circling\", \"they saw our convoy and called home\".\n" +
+            "        * outpost: dug-in garrison — command ship + escorts,\n" +
+            "          perimeter patrols closing in, HQ reserves. Init 1 big\n" +
+            "          + 4 small; +20s 4 small; +60s 2 big. Pitch: \"they've\n" +
+            "          fortified\", \"dug in\", \"a forward base\", \"an\n" +
+            "          outpost\", \"occupying the sector\".\n" +
+            "        * lair: hidden ambush — heavy up front, perimeter scouts\n" +
+            "          race back, reserves from a second hideout. Init 3 big;\n" +
+            "          +15s 3 small; +45s 2 big. Pitch: \"a hidden base\", \"a\n" +
+            "          lair\", \"an ambush\", \"they're using the wreck as a\n" +
+            "          base\", \"we didn't see them coming\".\n" +
+            "        * raid: mobile nomadic pack — no base, no commander,\n" +
+            "          uniform equals hunting the lane. Init 5 medium; +15s\n" +
+            "          3 small; NO slow wave (nobody to summon). Pitch: \"a\n" +
+            "          warband hunting the lane\", \"a mobile pack\", \"a\n" +
+            "          roving band\", \"pirates on the move\".\n" +
+            "        * cornered_remnants: trapped enemies, everyone they have\n" +
+            "          is already here. t=0 2 big (staggered); +5s 4 small;\n" +
+            "          NO reinforcements. Pitch: \"they're cornered\", \"pushed\n" +
+            "          back to their last pocket\", \"finish the remnants\",\n" +
+            "          \"nowhere left to run\".\n" +
+            "        * swarm: low-quality horde, quantity over quality. NO big\n" +
+            "          ships ever. Init 5 small; +15s 3 small (capped 8 total).\n" +
+            "          Pitch: \"a drone swarm\", \"disposable pirates\", \"Fanatic\n" +
+            "          zealots\", \"a horde of cheap ships\".\n" +
+            "      DISAMBIGUATION — the ambiguity pairs that trip the LLM:\n" +
+            "        * outpost vs lair: both have big ships. If pitch says\n" +
+            "          \"wreck\"/\"hidden\"/\"ambush\"/\"surprise\" -> lair. If\n" +
+            "          \"fortified\"/\"perimeter\"/\"garrison\"/\"dug in\" -> outpost.\n" +
+            "        * raid vs swarm: both are groups of smaller ships. raid\n" +
+            "          is a COHESIVE pack of equals (medium-class, hunting\n" +
+            "          together); swarm is a MINDLESS mass (small-class,\n" +
+            "          disposable).\n" +
+            "        * scouting vs raid: scouting is a STATIC patrol that\n" +
+            "          SIGHTED the player and called home; raid is a MOBILE\n" +
+            "          pack HUNTING the player from the start.\n" +
+            "      Omit flavor for a balanced 3-5 ship engagement + 2-3 ship\n" +
+            "      reinforcement (the default). Pick a flavor ONLY when your\n" +
+            "      pitch genuinely fits one — a mismatched flavor creates\n" +
+            "      dissonance (the player sees a fleet that contradicts what\n" +
+            "      the broker promised).\n" +
             "  { \"intent\": \"gather_ore\",\n" +
             "    \"required_amount\": 1..50,\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +

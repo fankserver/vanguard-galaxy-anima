@@ -223,6 +223,9 @@ public class MissionBlockValidatorTests
     [InlineData("scouting")]
     [InlineData("outpost")]
     [InlineData("lair")]
+    [InlineData("raid")]
+    [InlineData("cornered_remnants")]
+    [InlineData("swarm")]
     public void Parse_ClearCombatSite_Flavor_Accepts(string flavor)
     {
         var m = ValidMission(steps: new JArray(new JObject
