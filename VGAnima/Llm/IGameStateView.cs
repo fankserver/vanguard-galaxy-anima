@@ -17,7 +17,9 @@ internal interface IGameStateView
 {
     // Player section
     int PlayerLevel { get; }
-    long PlayerCredits { get; }
+    // PlayerCredits intentionally omitted — bank balance is private-
+    // knowledge; exposing it would break the same rule that removed
+    // cargo-item classification and cargo_used_pct.
     string PlayerSpecialization { get; }
     int BountyRank { get; }
     int PatrolRank { get; }

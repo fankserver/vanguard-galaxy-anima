@@ -91,7 +91,11 @@ internal sealed class LlmContext
 internal sealed class LlmPlayerSection
 {
     [JsonProperty("level")]                 public int Level { get; set; }
-    [JsonProperty("credits")]               public long Credits { get; set; }
+    // `credits` (bank balance) is NOT exposed — a broker NPC can't see a
+    // wallet any more than they can see into a cargo hold. The historical
+    // note in MissionGuidanceBuilder used "bank balance" as its explicit
+    // analogy when removing cargo-item classification; keeping the credit
+    // field here would have contradicted that same principle.
     [JsonProperty("specialization")]        public string Specialization { get; set; } = string.Empty;
     [JsonProperty("bounty_rank")]           public int BountyRank { get; set; }
     [JsonProperty("patrol_rank")]           public int PatrolRank { get; set; }
@@ -115,14 +119,18 @@ internal sealed record LlmShipSnapshot(
     [property: JsonProperty("name")]          string Name,
     [property: JsonProperty("faction")]       string Faction,
     [property: JsonProperty("level")]         int Level,
+    // Hull + shield % survive — visibly beat-up hulls are observable on
+    // the dock (a broker can tell a battered pilot from a pristine one).
     [property: JsonProperty("hull_pct")]      int HullPct,
     [property: JsonProperty("shield_pct")]    int ShieldPct,
-    [property: JsonProperty("cargo_used_pct")] int CargoUsedPct,
+    // `cargo_used_pct` is NOT exposed — how full your hold is is
+    // internal state the broker has no line of sight to. Removed
+    // 2026-04-23 along with player.credits on the same narrative-
+    // honesty principle.
     // Hardpoint-derived loadout flags — the game's own HasLoadout check
     // (reads turrets + drone bay + torpedo bay, classified by the
-    // GameplayType the mounted items declare). Authoritative "is this ship
-    // equipped to do X right now" signal; honest even when the player has
-    // mining tools mounted on a nominally-combat hull or vice versa.
+    // GameplayType the mounted items declare). Externally observable:
+    // mounted turrets and tools are visible on a parked ship.
     [property: JsonProperty("has_combat_loadout")]  bool HasCombatLoadout,
     [property: JsonProperty("has_mining_loadout")]  bool HasMiningLoadout,
     [property: JsonProperty("has_salvage_loadout")] bool HasSalvageLoadout);

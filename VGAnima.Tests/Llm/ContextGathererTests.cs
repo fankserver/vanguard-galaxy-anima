@@ -10,7 +10,6 @@ public class ContextGathererTests
     private sealed class FakeGameStateView : IGameStateView
     {
         public int PlayerLevel { get; set; } = 15;
-        public long PlayerCredits { get; set; } = 250000;
         public string PlayerSpecialization { get; set; } = "Engineering";
         public int BountyRank { get; set; } = 3;
         public int PatrolRank { get; set; } = 0;
@@ -24,7 +23,7 @@ public class ContextGathererTests
 
         public LlmShipSnapshot? PrimaryShip { get; set; } = new(
             Name: "Vanguard-X", Faction: "Player", Level: 14,
-            HullPct: 85, ShieldPct: 100, CargoUsedPct: 60,
+            HullPct: 85, ShieldPct: 100,
             HasCombatLoadout: false, HasMiningLoadout: false, HasSalvageLoadout: false);
         public IReadOnlyList<LlmStoredShipSnapshot> StoredShips { get; set; } = new List<LlmStoredShipSnapshot>();
         public IReadOnlyList<LlmCrewSnapshot> Crew { get; set; } = new List<LlmCrewSnapshot>();
@@ -62,7 +61,6 @@ public class ContextGathererTests
         var ctx = new ContextGatherer().Gather(view, Broker());
 
         Assert.Equal(15, ctx.Player.Level);
-        Assert.Equal(250000, ctx.Player.Credits);
         Assert.Equal("Engineering", ctx.Player.Specialization);
         Assert.Equal(3, ctx.Player.BountyRank);
         Assert.Equal(8, ctx.Player.MaxBountyLevel);

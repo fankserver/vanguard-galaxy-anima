@@ -91,7 +91,7 @@ public class WhitelistsTests
     // Composite — forbidding EITHER archetype must block the intent.
     [InlineData("defended_gather_ore",     new[] { "combat", "gather" })]
     [InlineData("defended_gather_salvage", new[] { "combat", "salvage" })]
-    [InlineData("haul_goods",              new[] { "gather", "deliver" })]
+    [InlineData("haul_goods",              new[] { "deliver" })]
     public void IntentWhitelist_Archetypes_Correct(string intent, string[] expected)
     {
         var archetypes = IntentWhitelist.Archetypes(intent);

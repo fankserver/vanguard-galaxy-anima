@@ -458,10 +458,32 @@ public class MissionBlockValidatorTests
     }
 
     [Fact]
-    public void Parse_GatherForbidden_BlocksHaulGoods()
+    public void Parse_GatherForbidden_AllowsHaulGoods()
     {
-        // haul_goods is composite (gather+deliver); gather in forbidden
-        // list must still block it.
+        // haul_goods is a courier pitch — trade goods the broker hands
+        // over for delivery, NOT ore mining. Mapped to `deliver` only
+        // (2026-04-23 narrative-honesty refactor), so a `gather`
+        // forbidden entry must NOT block it. Previously the mapping
+        // was composite (gather+deliver) which gave haul_goods an
+        // unearned coupling to the mining archetype.
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]          = "haul_goods",
+            ["required_amount"] = 10,
+            ["destination_id"]  = "dest_0",
+            ["description"]     = "d",
+        }));
+        // Should parse without throwing.
+        Validator().Parse(m, Hostiles, Rep,
+            forbiddenArchetypes: new[] { "gather" },
+            accessibleDestinations: Destinations);
+    }
+
+    [Fact]
+    public void Parse_DeliverForbidden_BlocksHaulGoods()
+    {
+        // haul_goods now maps to `deliver` only, so deliver-forbidden
+        // is the ONE forbidden-archetype gate that can still block it.
         var m = ValidMission(steps: new JArray(new JObject
         {
             ["intent"]          = "haul_goods",
@@ -471,7 +493,7 @@ public class MissionBlockValidatorTests
         }));
         Assert.Throws<LlmValidationException>(
             () => Validator().Parse(m, Hostiles, Rep,
-                forbiddenArchetypes: new[] { "gather" },
+                forbiddenArchetypes: new[] { "deliver" },
                 accessibleDestinations: Destinations));
     }
 

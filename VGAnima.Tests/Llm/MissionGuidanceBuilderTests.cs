@@ -16,7 +16,7 @@ public class MissionGuidanceBuilderTests
     {
         Player = new LlmPlayerSection
         {
-            Level = 1, Credits = 1000, Specialization = string.Empty,
+            Level = 1, Specialization = string.Empty,
             UnlockedTitles    = new List<string>(),
             ActiveMissionCount = 0, ActiveMissionCap = 20,
         },
@@ -24,7 +24,7 @@ public class MissionGuidanceBuilderTests
         {
             PrimaryShip = new LlmShipSnapshot(
                 Name: "X", Faction: "Player", Level: 1,
-                HullPct: 100, ShieldPct: 100, CargoUsedPct: 0,
+                HullPct: 100, ShieldPct: 100,
                 HasCombatLoadout: false, HasMiningLoadout: false, HasSalvageLoadout: false),
             StoredShips = new List<LlmStoredShipSnapshot>(),
             Crew        = new List<LlmCrewSnapshot>(),

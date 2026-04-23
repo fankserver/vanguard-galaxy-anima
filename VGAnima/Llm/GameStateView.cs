@@ -33,8 +33,7 @@ internal sealed class GameStateView : IGameStateView
     public int PlayerLevel =>
         GamePlayer.current?.level ?? 0;
 
-    public long PlayerCredits =>
-        GamePlayer.current?.credits ?? 0L;
+    // PlayerCredits removed — see IGameStateView rationale.
 
     public string PlayerSpecialization
     {
@@ -79,15 +78,13 @@ internal sealed class GameStateView : IGameStateView
             if (ship == null) return null;
             var hullPct   = ship.maxHullHP   > 0f ? (int)(100f * ship.currentHullHP   / ship.maxHullHP)   : 0;
             var shieldPct = ship.maxShieldHP > 0f ? (int)(100f * ship.currentShieldHP / ship.maxShieldHP) : 0;
-            var capacity = ship.cargoCapacity;
-            var cargoPct = capacity > 0f ? (int)(100f * ship.cargoUsed / capacity) : 0;
+            // cargoUsed/capacity intentionally NOT read — see LlmShipSnapshot.
             return new LlmShipSnapshot(
                 Name:              ship.name ?? string.Empty,
                 Faction:           ship.faction?.identifier ?? string.Empty,
                 Level:             ship.level,
                 HullPct:           hullPct,
                 ShieldPct:         shieldPct,
-                CargoUsedPct:      cargoPct,
                 HasCombatLoadout:  ship.HasLoadout(GameplayType.Combat),
                 HasMiningLoadout:  ship.HasLoadout(GameplayType.Mining),
                 HasSalvageLoadout: ship.HasLoadout(GameplayType.Salvage));

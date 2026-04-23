@@ -38,7 +38,6 @@ internal sealed class ContextGatherer
             Player = new LlmPlayerSection
             {
                 Level             = view.PlayerLevel,
-                Credits           = view.PlayerCredits,
                 Specialization    = view.PlayerSpecialization,
                 BountyRank        = view.BountyRank,
                 PatrolRank        = view.PatrolRank,

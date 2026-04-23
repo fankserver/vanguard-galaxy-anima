@@ -80,7 +80,7 @@ public class LlmContextJsonTests
 
         foreach (var key in new[]
         {
-            "level", "credits", "specialization",
+            "level", "specialization",
             "bounty_rank", "patrol_rank", "industry_rank",
             "max_bounty_level", "max_patrol_level", "max_industry_level",
             "unlocked_titles", "active_mission_count", "active_mission_cap",
@@ -141,7 +141,6 @@ public class LlmContextJsonTests
             Player = new LlmPlayerSection
             {
                 Level = 1,
-                Credits = 0,
                 Specialization = "Unspecified",
                 BountyRank = 0, PatrolRank = 0, IndustryRank = 0,
                 MaxBountyLevel = 0, MaxPatrolLevel = 0, MaxIndustryLevel = 0,

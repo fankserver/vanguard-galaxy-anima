@@ -60,8 +60,13 @@ internal static class IntentWhitelist
         DefendedGatherOre     => new[] { "combat", "gather" },
         DefendedGatherSalvage => new[] { "combat", "salvage" },
         DeliverToStation      => new[] { "deliver" },
-        // haul = gather trade goods + deliver to station. Composite.
-        HaulGoods             => new[] { "gather", "deliver" },
+        // haul = pick up trade goods the broker provides, deliver to the
+        // destination. The "gather" step is a mission-given pickup, not
+        // ore mining — it shares no signals with the gather archetype
+        // (no asteroid fields, no mining loadout relevance). Map to
+        // deliver only; previously lumped "gather + deliver" gave
+        // haul_goods an unearned boost when mining signals were strong.
+        HaulGoods             => new[] { "deliver" },
         _                     => System.Array.Empty<string>(),
     };
 }

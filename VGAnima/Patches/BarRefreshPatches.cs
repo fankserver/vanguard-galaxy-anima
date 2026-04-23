@@ -873,14 +873,14 @@ internal static class BarRefreshPatches
             "  speaker's name separately.\n\n" +
             "COHERENCE RULES:\n" +
             "- MISSION ARCHETYPE — context.mission_guidance has a ranked weights dict\n" +
-            "  derived from player specialization, titles, cargo, active missions, station\n" +
-            "  facilities, ship state, and faction state. Top-ranked archetype is the\n" +
-            "  default pick. Intent -> archetype mapping:\n" +
+            "  derived from player specialization, titles, active missions, station\n" +
+            "  facilities, ship hardpoint loadout, and faction state. Top-ranked archetype\n" +
+            "  is the default pick. Intent -> archetype mapping:\n" +
             "    * clear_combat_site -> combat\n" +
             "    * gather_ore / defended_gather_ore -> gather (defended also = combat)\n" +
             "    * gather_salvage / defended_gather_salvage -> salvage (defended also = combat)\n" +
             "    * deliver_to_station -> deliver\n" +
-            "    * haul_goods -> gather + deliver (composite)\n" +
+            "    * haul_goods -> deliver\n" +
             "  The validator mechanically rejects intents whose archetypes appear in\n" +
             "  mission_guidance.forbidden_archetypes. When combat is forbidden, ALSO keep\n" +
             "  the DIALOGUE non-combat — no defenders, raiders, or ambushes in the lines\n" +
