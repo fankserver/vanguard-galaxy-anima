@@ -381,11 +381,9 @@ public class ResponseValidatorTests
             ""completion_text"": ""Thanks."",
             ""source_faction"":  ""TradingGuild"",
             ""steps"": [
-                { ""objectives"": [
-                    { ""type"": ""TriggerObjective"",
-                      ""trigger"": ""DockedWithSpaceStation"",
-                      ""required_amount"": 1,
-                      ""description"": ""Dock."" } ] } ],
+                { ""intent"": ""gather_ore"",
+                  ""required_amount"": 10,
+                  ""description"": ""Mine ore."" } ],
             ""rewards"": [
                 { ""type"": ""Credits"", ""base_value"": 50 } ] } }";
 
@@ -433,14 +431,14 @@ public class ResponseValidatorTests
     }
 
     [Fact]
-    public void Parse_V2Mission_DispatchesToMissionValidator_OnBadObjective()
+    public void Parse_V2Mission_DispatchesToMissionValidator_OnBadIntent()
     {
         var broken = ValidMissionPayload.Replace(
-            @"""DockedWithSpaceStation""",
-            @"""BountyTargetKilled""");
+            @"""gather_ore""",
+            @"""build_deathstar""");
         var ex = Assert.Throws<LlmValidationException>(
             () => new ResponseValidator().Parse(broken));
-        Assert.Contains("trigger", ex.Message);
+        Assert.Contains("intent", ex.Message);
     }
 
     [Fact]
@@ -455,37 +453,33 @@ public class ResponseValidatorTests
     }
 
     [Fact]
-    public void Parse_V2Mission_WithAtWarContext_AcceptsHostileKill()
+    public void Parse_V2Mission_WithAtWarContext_AcceptsHostileClearCombat()
     {
         var payload = ValidMissionPayload.Replace(
-            @"{ ""type"": ""TriggerObjective"",
-                      ""trigger"": ""DockedWithSpaceStation"",
-                      ""required_amount"": 1,
-                      ""description"": ""Dock."" }",
-            @"{ ""type"": ""KillEnemies"",
-                      ""enemy_faction"": ""Marauders"",
-                      ""required_amount"": 2,
-                      ""description"": ""Kill them."" }");
+            @"{ ""intent"": ""gather_ore"",
+                  ""required_amount"": 10,
+                  ""description"": ""Mine ore."" }",
+            @"{ ""intent"": ""clear_combat_site"",
+                  ""enemy_faction"": ""Marauders"",
+                  ""description"": ""Clear them."" }");
 
         var atWar = new[] { "Marauders" };
         var rep   = new System.Collections.Generic.Dictionary<string, int>();
         var story = new ResponseValidator().Parse(payload, atWar, rep);
         Assert.NotNull(story.Mission);
-        Assert.IsType<LlmKillEnemies>(story.Mission!.Steps[0].Objectives[0]);
+        Assert.IsType<ClearCombatSiteIntent>(story.Mission!.Steps[0].Intent);
     }
 
     [Fact]
-    public void Parse_V2Mission_WithFriendlyContext_RejectsKillAlly()
+    public void Parse_V2Mission_WithFriendlyContext_RejectsClearFriendly()
     {
         var payload = ValidMissionPayload.Replace(
-            @"{ ""type"": ""TriggerObjective"",
-                      ""trigger"": ""DockedWithSpaceStation"",
-                      ""required_amount"": 1,
-                      ""description"": ""Dock."" }",
-            @"{ ""type"": ""KillEnemies"",
-                      ""enemy_faction"": ""TradingGuild"",
-                      ""required_amount"": 2,
-                      ""description"": ""Kill allies."" }");
+            @"{ ""intent"": ""gather_ore"",
+                  ""required_amount"": 10,
+                  ""description"": ""Mine ore."" }",
+            @"{ ""intent"": ""clear_combat_site"",
+                  ""enemy_faction"": ""TradingGuild"",
+                  ""description"": ""Clear allies."" }");
 
         var atWar = System.Array.Empty<string>();
         var rep   = new System.Collections.Generic.Dictionary<string, int>

@@ -13,7 +13,7 @@ public class MagnitudeScorerTests
         var stepList = new List<LlmMissionStep>();
         for (var i = 0; i < steps; i++)
             stepList.Add(new LlmMissionStep(
-                new LlmObjective[] { new LlmClearPoi("Marauders", "d") }));
+                new ClearCombatSiteIntent("Marauders", "d")));
         return new LlmMissionBlock(
             Name: "Test", Description: "x", CompletionText: "x",
             SourceFaction: "SalvageGuild",

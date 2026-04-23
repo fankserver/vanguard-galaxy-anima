@@ -8,106 +8,100 @@ namespace VGAnima.Tests.Missions;
 
 public class ArchetypeInferrerTests
 {
-    private static LlmMissionBlock Block(params LlmObjective[] objectives) =>
-        new(Name: "Test", Description: "x", CompletionText: "x",
+    private static LlmMissionBlock Block(params LlmIntent[] intents)
+    {
+        var steps = new List<LlmMissionStep>(intents.Length);
+        foreach (var i in intents) steps.Add(new LlmMissionStep(i));
+        return new LlmMissionBlock(
+            Name: "Test", Description: "x", CompletionText: "x",
             SourceFaction: "SalvageGuild",
-            Steps:   new[] { new LlmMissionStep(objectives) },
+            Steps:   steps,
             Rewards: new List<LlmReward>());
+    }
 
     [Fact]
-    public void ClearPoi_Alone_IsCombat()
+    public void ClearCombatSite_Alone_IsCombat()
     {
-        var b = Block(new LlmClearPoi("Marauders", "desc"));
+        var b = Block(new ClearCombatSiteIntent("Marauders", "desc"));
         Assert.Equal(MissionArchetypes.Combat, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void KillEnemies_Alone_IsCombat()
+    public void GatherOre_Alone_IsGather()
     {
-        var b = Block(new LlmKillEnemies("Marauders", 3, "desc"));
-        Assert.Equal(MissionArchetypes.Combat, ArchetypeInferrer.Infer(b));
-    }
-
-    [Fact]
-    public void CollectOre_Alone_IsGather()
-    {
-        var b = Block(new LlmCollectItemTypes("Ore", 10, "desc"));
+        var b = Block(new GatherOreIntent(10, "desc"));
         Assert.Equal(MissionArchetypes.Gather, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void CollectSalvage_Alone_IsSalvage()
+    public void GatherSalvage_Alone_IsSalvage()
     {
-        var b = Block(new LlmCollectItemTypes("Salvage", 10, "desc"));
+        var b = Block(new GatherSalvageIntent(10, "desc"));
         Assert.Equal(MissionArchetypes.Salvage, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void CollectSalvage_WithGuards_IsDefendedCollect()
+    public void DefendedGatherSalvage_IsDefendedCollect()
     {
-        // Single-step defended gather — guards_faction set makes it the
-        // hybrid shape even without a separate combat objective.
-        var b = Block(new LlmCollectItemTypes(
-            "Salvage", 10, "desc", GuardsFaction: "Marauders"));
+        // Single-step defended gather: the intent itself is the hybrid
+        // shape, no separate combat step needed.
+        var b = Block(new DefendedGatherSalvageIntent(10, "Marauders", "desc"));
         Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void CollectOre_WithGuards_IsDefendedCollect()
+    public void DefendedGatherOre_IsDefendedCollect()
     {
-        var b = Block(new LlmCollectItemTypes(
-            "Ore", 10, "desc", GuardsFaction: "Marauders"));
+        var b = Block(new DefendedGatherOreIntent(10, "Marauders", "desc"));
         Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void ClearPoi_PlusCollect_SameStep_IsDefendedCollect()
+    public void MultiStep_CombatThenSalvage_IsDefendedCollect()
     {
-        // Hybrid detected at mission-wide scope, not just step-level.
+        // Cross-step combat + gather should also collapse to the hybrid
+        // tag — journal queries asking for combat OR salvage history match.
         var b = Block(
-            new LlmClearPoi("Marauders", "clear"),
-            new LlmCollectItemTypes("Salvage", 10, "collect"));
+            new ClearCombatSiteIntent("Marauders", "clear"),
+            new GatherSalvageIntent(10, "collect"));
         Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void MultiStep_CombatThenGather_IsDefendedCollect()
+    public void MultiStep_CombatThenOre_IsDefendedCollect()
     {
-        // Combat step + gather step = hybrid. Inferrer looks across all steps.
+        var b = Block(
+            new ClearCombatSiteIntent("Marauders", "clear"),
+            new GatherOreIntent(10, "collect"));
+        Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
+    }
+
+    [Fact]
+    public void DeliverToStation_Alone_IsDeliver()
+    {
+        var b = Block(new DeliverToStationIntent("dest_0", "d"));
+        Assert.Equal(MissionArchetypes.Deliver, ArchetypeInferrer.Infer(b));
+    }
+
+    [Fact]
+    public void HaulGoods_Alone_IsDeliver()
+    {
+        // HaulGoods is a composite (gather trade goods + deliver), but the
+        // resolved archetype is Deliver since there's no Ore/Salvage POI.
+        var b = Block(new HaulGoodsIntent(10, "dest_0", "d"));
+        Assert.Equal(MissionArchetypes.Deliver, ArchetypeInferrer.Infer(b));
+    }
+
+    [Fact]
+    public void EmptyBlock_IsOther()
+    {
+        // Degenerate fallback — should never happen in production (validator
+        // requires >=1 step) but the inferrer handles it gracefully.
         var b = new LlmMissionBlock(
-            Name: "Multi", Description: "x", CompletionText: "x",
+            Name: "Empty", Description: "x", CompletionText: "x",
             SourceFaction: "SalvageGuild",
-            Steps: new[]
-            {
-                new LlmMissionStep(new LlmObjective[] { new LlmClearPoi("Marauders", "d") }),
-                new LlmMissionStep(new LlmObjective[] { new LlmCollectItemTypes("Salvage", 10, "d") }),
-            },
+            Steps:   new List<LlmMissionStep>(),
             Rewards: new List<LlmReward>());
-        Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
-    }
-
-    [Fact]
-    public void ProtectUnit_IsEscort_EvenWithCombat()
-    {
-        var b = Block(
-            new LlmProtectUnit("Protect the freighter."),
-            new LlmClearPoi("Marauders", "also fight"));
-        Assert.Equal(MissionArchetypes.Escort, ArchetypeInferrer.Infer(b));
-    }
-
-    [Fact]
-    public void TriggerObjective_Alone_IsDeliver()
-    {
-        var b = Block(new LlmTriggerObjective("DockedWithSpaceStation", 1, "d"));
-        Assert.Equal(MissionArchetypes.Deliver, ArchetypeInferrer.Infer(b));
-    }
-
-    [Fact]
-    public void CollectTradeGoods_Alone_IsDeliver()
-    {
-        // TradeGoods / RefinedProduct don't spawn POIs — treated as deliver
-        // archetype even without a separate TriggerObjective.
-        var b = Block(new LlmCollectItemTypes("TradeGoods", 10, "d"));
-        Assert.Equal(MissionArchetypes.Deliver, ArchetypeInferrer.Infer(b));
+        Assert.Equal(MissionArchetypes.Other, ArchetypeInferrer.Infer(b));
     }
 }

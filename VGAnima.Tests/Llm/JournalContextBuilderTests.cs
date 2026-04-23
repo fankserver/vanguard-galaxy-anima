@@ -124,7 +124,7 @@ public class JournalContextBuilderTests
             Name: $"Mission-{storyId}", Description: "d", CompletionText: "c",
             SourceFaction: faction,
             Steps:   new[] { new LlmMissionStep(
-                new LlmObjective[] { new LlmClearPoi("Marauders", "x") }) },
+                new ClearCombatSiteIntent("Marauders", "x")) },
             Rewards: new System.Collections.Generic.List<LlmReward>());
         var story  = new LlmStory(
             new[] { "pitch" }, new[] { "check" }, new[] { "pay" }, block);

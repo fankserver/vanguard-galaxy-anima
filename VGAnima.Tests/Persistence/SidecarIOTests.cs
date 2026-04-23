@@ -95,14 +95,17 @@ public class SidecarIOTests : IDisposable
     {
         // The binder in SidecarSchema.SerializerSettings must reject any
         // $type discriminator naming a type outside the allowlisted
-        // LlmObjective / LlmReward subtypes. This is our defense against
-        // a malicious sidecar (e.g., one that arrived via cloud-sync or
-        // modpack distribution) trying to instantiate arbitrary types.
+        // LlmIntent / LlmReward subtypes. Defense against a malicious
+        // sidecar (cloud-sync, modpack distribution) trying to instantiate
+        // arbitrary gadget types.
+        //
+        // Smoking-gun case: $type naming System.IO.FileInfo — a real
+        // Newtonsoft gadget-chain target. Binder must refuse.
         var json = """
             {"version":1,"entries":[{
               "storyId":"x","state":"offered",
               "missionBlock":{"name":"x","description":"x","sourceFaction":"x","completionText":"x",
-                "steps":[{"description":"x","objectives":[{"$type":"System.IO.FileInfo, System.IO.FileSystem","description":"x"}]}],
+                "steps":[{"intent":{"$type":"System.IO.FileInfo, System.IO.FileSystem","description":"x"}}],
                 "rewards":[]},
               "broker":{"seed":"x","stationId":"x","displayName":"x","isMale":true,"story":{"hook":["h"],"pitch":["p"],"rejection":["r"],"reward":["w"],"character":[]}},
               "timestamps":{"createdGameSeconds":0,"createdRealUtc":"z","lastSeenGameSeconds":0,"lastSeenRealUtc":"z"}

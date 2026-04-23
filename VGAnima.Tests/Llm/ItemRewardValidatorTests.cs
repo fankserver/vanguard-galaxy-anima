@@ -20,13 +20,9 @@ public class ItemRewardValidatorTests
             ["source_faction"]  = "SalvageGuild",
             ["steps"] = new JArray(new JObject
             {
-                ["objectives"] = new JArray(new JObject
-                {
-                    ["type"]            = "CollectItemTypes",
-                    ["item_category"]   = "Ore",
-                    ["required_amount"] = 5,
-                    ["description"]     = "Collect.",
-                }),
+                ["intent"]          = "gather_ore",
+                ["required_amount"] = 5,
+                ["description"]     = "Mine ore.",
             }),
             ["rewards"] = new JArray(reward),
         };

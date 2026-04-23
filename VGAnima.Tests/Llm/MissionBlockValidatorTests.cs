@@ -5,1367 +5,524 @@ using Xunit;
 
 namespace VGAnima.Tests.Llm;
 
+/// <summary>Validator coverage for the v2 intent-based mission schema.
+/// Each step carries exactly one intent from <see cref="IntentWhitelist"/>;
+/// the validator checks intent-specific field sets, hostility rules,
+/// destination id membership, and archetype forbidden-list enforcement.</summary>
 public class MissionBlockValidatorTests
 {
-    /// <summary>Context subset used for cross-checks (enemy_faction hostility).
-    /// Plain record, not a seam over IGameStateView — the validator only needs
-    /// AtWar + Reputation lookups, both supplied at call time.</summary>
     private static readonly IReadOnlyList<string> Hostiles =
         new[] { "Marauders", "Darkspacers" };
 
-    private static readonly IReadOnlyDictionary<string, int> NeutralAndHostileRep =
+    private static readonly IReadOnlyDictionary<string, int> Rep =
         new Dictionary<string, int>
         {
-            { "Marauders",       -10 },
-            { "Darkspacers",     -50 },
-            { "TradingGuild",    100 },
-            { "PoliceGuild",      50 },
-            { "BountyGuild",      20 },
-            { "Stranded",          0 },
-            { "MiningGuild",       0 },
+            { "Marauders",    -10 },
+            { "Darkspacers",  -50 },
+            { "TradingGuild", 100 },
+            { "PoliceGuild",   50 },
+            { "Stranded",       0 },
+        };
+
+    private static readonly IReadOnlyList<AccessibleDestination> Destinations =
+        new[]
+        {
+            new AccessibleDestination(
+                ShortId: "dest_0", StationName: "Sarus Prime", SystemName: "Sarus",
+                FactionIdentifier: "Gold", FactionDisplayName: "Luminate",
+                JumpsAway: 1, SameFactionAsBroker: false, Guid: "guid_sarus"),
+            new AccessibleDestination(
+                ShortId: "dest_1", StationName: "Kelar Outpost", SystemName: "Kelar",
+                FactionIdentifier: "Red", FactionDisplayName: "Kolyatov",
+                JumpsAway: 1, SameFactionAsBroker: false, Guid: "guid_kelar"),
         };
 
     private static MissionBlockValidator Validator() => new();
 
-    // ---------- Rule 1: mission must be a JSON object ----------
+    private static JObject ValidMission(JArray? steps = null, JArray? rewards = null)
+    {
+        steps ??= new JArray(
+            new JObject
+            {
+                ["intent"]          = "gather_salvage",
+                ["required_amount"] = 15,
+                ["description"]     = "Scavenge the derelict.",
+            });
+        rewards ??= new JArray(
+            new JObject { ["type"] = "Credits",    ["base_value"] = 30 },
+            new JObject { ["type"] = "Experience", ["base_value"] = 50 });
+        return new JObject
+        {
+            ["name"]            = "Test",
+            ["description"]     = "x",
+            ["completion_text"] = "y",
+            ["source_faction"]  = "SalvageGuild",
+            ["steps"]           = steps,
+            ["rewards"]         = rewards,
+        };
+    }
+
+    // -------- Envelope --------
 
     [Fact]
-    public void Parse_WhenMissionIsArray_Rejects()
+    public void Parse_MissionMustBeObject()
     {
-        var mission = JToken.Parse("[]");
         var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(JToken.Parse("[]"), Hostiles, Rep));
         Assert.Contains("object", ex.Message);
     }
 
     [Fact]
-    public void Parse_WhenMissionIsString_Rejects()
+    public void Parse_RejectsUnknownTopLevelField()
     {
-        var mission = JToken.Parse("\"oops\"");
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_WhenMissionIsNull_Rejects()
-    {
-        var mission = JToken.Parse("null");
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- Rule 2: strict field set ----------
-
-    [Fact]
-    public void Parse_MissingName_Rejects()
-    {
-        var mission = BuildWithoutField("name");
+        var m = ValidMission();
+        m["extra_field"] = "oops";
         var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("name", ex.Message);
+            () => Validator().Parse(m, Hostiles, Rep));
+        Assert.Contains("extra_field", ex.Message);
     }
 
     [Fact]
-    public void Parse_MissingDescription_Rejects()
+    public void Parse_RejectsMissingRequiredField()
     {
-        var mission = BuildWithoutField("description");
+        var m = ValidMission();
+        m.Remove("name");
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_MissingCompletionText_Rejects()
-    {
-        var mission = BuildWithoutField("completion_text");
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_MissingSourceFaction_Rejects()
-    {
-        var mission = BuildWithoutField("source_faction");
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_MissingSteps_Rejects()
-    {
-        var mission = BuildWithoutField("steps");
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_MissingRewards_Rejects()
-    {
-        var mission = BuildWithoutField("rewards");
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_ExtraTopLevelField_Rejects()
-    {
-        var mission = BuildGood();
-        mission["extra_key"] = "stuff";
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("extra_key", ex.Message);
-    }
-
-    // ---------- Rule 3: string caps + ASCII ----------
-
-    [Fact]
-    public void Parse_NameTooLong_Rejects()
-    {
-        var mission = BuildGood();
-        mission["name"] = new string('x', 61);
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_DescriptionTooLong_Rejects()
-    {
-        var mission = BuildGood();
-        mission["description"] = new string('x', 501);
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_CompletionTextTooLong_Rejects()
-    {
-        var mission = BuildGood();
-        mission["completion_text"] = new string('x', 201);
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_NameEmpty_Rejects()
-    {
-        var mission = BuildGood();
-        mission["name"] = "   ";
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
     [Fact]
     public void Parse_NonAsciiInName_Rejects()
     {
-        var mission = BuildGood();
-        mission["name"] = "Name \u2014 em-dash";
+        var m = ValidMission();
+        m["name"] = "Too — fancy";   // em dash
         var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("ascii", ex.Message, System.StringComparison.OrdinalIgnoreCase);
-    }
-
-    // ---------- Rule 4: source_faction whitelist ----------
-
-    [Fact]
-    public void Parse_SourceFactionUnknown_Rejects()
-    {
-        var mission = BuildGood();
-        mission["source_faction"] = "NotAFaction";
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("source_faction", ex.Message);
+            () => Validator().Parse(m, Hostiles, Rep));
+        Assert.Contains("non-ascii", ex.Message);
     }
 
     [Fact]
-    public void Parse_SourceFactionPlayer_Rejects()
+    public void Parse_TooLongDescription_Rejects()
     {
-        var mission = BuildGood();
-        mission["source_faction"] = "Player";
+        var m = ValidMission();
+        m["description"] = new string('x', MissionBlockValidator.DescriptionMaxLen + 1);
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
-    // ---------- Rule 5: steps array size ----------
-
     [Fact]
-    public void Parse_StepsEmpty_Rejects()
+    public void Parse_EmptyStringAfterTrim_Rejects()
     {
-        var mission = BuildGood();
-        mission["steps"] = new JArray();
+        var m = ValidMission();
+        m["name"] = "   ";
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
+    // -------- source_faction --------
+
     [Fact]
-    public void Parse_StepsTooMany_Rejects()
+    public void Parse_UnknownSourceFaction_Rejects()
     {
-        var mission = BuildGood();
-        mission["steps"] = new JArray(BuildStep(), BuildStep(), BuildStep(), BuildStep());
+        var m = ValidMission();
+        m["source_faction"] = "Fakers";
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
+    // -------- Steps envelope --------
+
     [Fact]
-    public void Parse_StepNotObject_Rejects()
+    public void Parse_EmptySteps_Rejects()
     {
-        var mission = BuildGood();
-        mission["steps"] = new JArray("not-a-step");
+        var m = ValidMission(steps: new JArray());
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
     [Fact]
-    public void Parse_StepObjectivesEmpty_Rejects()
+    public void Parse_FourSteps_Rejects()
     {
-        var mission = BuildGood();
-        var step = new JObject { ["objectives"] = new JArray() };
-        mission["steps"] = new JArray(step);
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_StepObjectivesTooMany_Rejects()
-    {
-        var mission = BuildGood();
-        var step = new JObject
+        var s = new JObject
         {
-            ["objectives"] = new JArray(
-                BuildTriggerObj(), BuildTriggerObj(), BuildTriggerObj()),
-        };
-        mission["steps"] = new JArray(step);
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- Rule 7: per-objective type dispatch ----------
-
-    [Fact]
-    public void Parse_ObjectiveUnknownType_Rejects()
-    {
-        var mission = BuildGood();
-        var bad = new JObject { ["type"] = "TradeOffer" };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(bad),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("TradeOffer", ex.Message);
-    }
-
-    // ---------- KillEnemies per-type rules ----------
-
-    [Fact]
-    public void Parse_KillEnemies_HappyPath()
-    {
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "Marauders",
-            ["required_amount"] = 3,
-            ["description"]     = "Kill three Marauders.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.Single(block.Steps);
-        var obj = Assert.IsType<LlmKillEnemies>(block.Steps[0].Objectives[0]);
-        Assert.Equal("Marauders", obj.EnemyFaction);
-        Assert.Equal(3, obj.RequiredAmount);
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_RequiredAmountZero_Rejects()
-    {
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "Marauders",
-            ["required_amount"] = 0,
-            ["description"]     = "Kill none.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_RequiredAmountTooBig_Rejects()
-    {
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "Marauders",
-            ["required_amount"] = 6,
-            ["description"]     = "Kill six.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_EnemyFactionFriendly_Rejects()
-    {
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "TradingGuild",  // +100 rep, not in Hostiles
-            ["required_amount"] = 2,
-            ["description"]     = "Kill allies.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("enemy_faction", ex.Message);
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_EnemyFactionNeutralRejected()
-    {
-        // Vanilla FactionData.IsEnemy: hostile iff at_war OR rep < -500.
-        // A rep=0 faction not on the atWar list is NEUTRAL, not hostile —
-        // the validator refuses to license a kill mission against them.
-        // Same rejection applies to the "don't-like" band (rep in -500..-1).
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "MiningGuild",  // rep 0, not at-war
-            ["required_amount"] = 2,
-            ["description"]     = "Kill neutrals.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("not hostile", ex.Message);
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_EnemyFactionShallowNegativeRejected()
-    {
-        // Marauders in Hostiles gets through via at_war. But a don't-like
-        // faction (rep in (-500, 0)) with NO at_war entry is still neutral
-        // in vanilla's book. Confirm rejection.
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            // Darkspacers is in Hostiles (atWar); swap to something not in it
-            // by using a fresh rep dict that puts Fanatics at -300.
-            ["enemy_faction"]   = "Fanatics",
-            ["required_amount"] = 2,
-            ["description"]     = "Premature kill.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        var rep = new Dictionary<string, int> { ["Fanatics"] = -300 };
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, new List<string>(), rep));
-        Assert.Contains("not hostile", ex.Message);
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_EnemyFactionDeepNegativeAccepted()
-    {
-        // rep < -500 → hostile per vanilla — allowed even without at_war.
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "Fanatics",
-            ["required_amount"] = 2,
-            ["description"]     = "Kill zealots.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        var rep = new Dictionary<string, int> { ["Fanatics"] = -6000 };
-        var block = Validator().Parse(mission, new List<string>(), rep);
-        Assert.Single(block.Steps);
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_EnemyFactionUnknown_Rejects()
-    {
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "NotAFaction",
-            ["required_amount"] = 2,
-            ["description"]     = "Kill.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_KillEnemies_DescriptionTooLong_Rejects()
-    {
-        var mission = BuildGood();
-        var kill = new JObject
-        {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "Marauders",
-            ["required_amount"] = 1,
-            ["description"]     = new string('x', 121),
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- ProtectUnit per-type rules ----------
-
-    [Fact]
-    public void Parse_ProtectUnit_HappyPath()
-    {
-        var mission = BuildGood();
-        var protect = new JObject
-        {
-            ["type"]         = "ProtectUnit",
-            ["protect_text"] = "Keep the convoy alive.",
-        };
-        // Must pair with a non-ProtectUnit objective to pass the degenerate-rule.
-        var kill = BuildKillObj("Marauders", 1);
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(protect, kill),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.IsType<LlmProtectUnit>(block.Steps[0].Objectives[0]);
-    }
-
-    [Fact]
-    public void Parse_ProtectUnit_MissingProtectText_Rejects()
-    {
-        var mission = BuildGood();
-        var protect = new JObject { ["type"] = "ProtectUnit" };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(protect, BuildKillObj("Marauders", 1)),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_ProtectUnit_ProtectTextTooLong_Rejects()
-    {
-        var mission = BuildGood();
-        var protect = new JObject
-        {
-            ["type"]         = "ProtectUnit",
-            ["protect_text"] = new string('x', 121),
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(protect, BuildKillObj("Marauders", 1)),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- TriggerObjective per-type rules ----------
-
-    [Fact]
-    public void Parse_TriggerObjective_HappyPath()
-    {
-        var mission = BuildGood();
-        var trig = new JObject
-        {
-            ["type"]            = "TriggerObjective",
-            ["trigger"]         = "DockedWithSpaceStation",
-            ["required_amount"] = 2,
-            ["description"]     = "Dock twice.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(trig),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var obj = Assert.IsType<LlmTriggerObjective>(block.Steps[0].Objectives[0]);
-        Assert.Equal("DockedWithSpaceStation", obj.Trigger);
-    }
-
-    [Fact]
-    public void Parse_TriggerObjective_TriggerNotWhitelisted_Rejects()
-    {
-        var mission = BuildGood();
-        var trig = new JObject
-        {
-            ["type"]            = "TriggerObjective",
-            ["trigger"]         = "BountyTargetKilled",  // real enum value; not whitelisted
-            ["required_amount"] = 1,
-            ["description"]     = "Kill.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(trig),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("trigger", ex.Message);
-    }
-
-    [Fact]
-    public void Parse_TriggerObjective_RequiredAmountTooBig_Rejects()
-    {
-        var mission = BuildGood();
-        var trig = new JObject
-        {
-            ["type"]            = "TriggerObjective",
-            ["trigger"]         = "DockedWithSpaceStation",
-            ["required_amount"] = 4,
-            ["description"]     = "Dock.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(trig),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- CollectItemTypes per-type rules ----------
-
-    [Fact]
-    public void Parse_CollectItemTypes_HappyPath()
-    {
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Ore",
+            ["intent"] = "gather_salvage",
             ["required_amount"] = 5,
-            ["description"]     = "Collect ore samples.",
+            ["description"] = "d",
         };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
-        Assert.Equal("Ore", obj.ItemCategory);
-        Assert.Equal(5, obj.RequiredAmount);
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_CategoryNotWhitelisted_Rejects()
-    {
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Crystal",
-            ["required_amount"] = 1,
-            ["description"]     = "Collect.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
+        var m = ValidMission(steps: new JArray(s, s.DeepClone(), s.DeepClone(), s.DeepClone()));
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
     [Fact]
-    public void Parse_CollectItemTypes_RequiredAmountTooBig_Rejects()
+    public void Parse_StepMissingIntent_Rejects()
     {
-        var mission = BuildGood();
-        var collect = new JObject
+        var m = ValidMission(steps: new JArray(new JObject { ["description"] = "d" }));
+        var ex = Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+        Assert.Contains("intent", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnknownIntent_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Ore",
-            ["required_amount"] = 51,
-            ["description"]     = "Collect.",
-        };
-        mission["steps"] = new JArray(new JObject
+            ["intent"]      = "build_deathstar",
+            ["description"] = "d",
+        }));
+        var ex = Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+        Assert.Contains("build_deathstar", ex.Message);
+    }
+
+    // -------- clear_combat_site --------
+
+    [Fact]
+    public void Parse_ClearCombatSite_Accepts()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["objectives"] = new JArray(collect),
-        });
+            ["intent"]        = "clear_combat_site",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "Clear the blockade.",
+        }));
+        var block = Validator().Parse(m, Hostiles, Rep);
+        var intent = Assert.IsType<ClearCombatSiteIntent>(block.Steps[0].Intent);
+        Assert.Equal("Marauders", intent.EnemyFaction);
+    }
+
+    [Fact]
+    public void Parse_ClearCombatSite_FriendlyFaction_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]        = "clear_combat_site",
+            ["enemy_faction"] = "TradingGuild",      // friendly rep=100
+            ["description"]   = "d",
+        }));
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
-    // ---------- CollectItemTypes guards_faction ----------
+    [Fact]
+    public void Parse_ClearCombatSite_ExtraField_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]        = "clear_combat_site",
+            ["enemy_faction"] = "Marauders",
+            ["description"]   = "d",
+            ["required_amount"] = 3,                 // not valid on this intent
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
+
+    // -------- gather_ore / gather_salvage --------
 
     [Fact]
-    public void Parse_CollectItemTypes_GuardsFaction_Salvage_HappyPath()
+    public void Parse_GatherOre_Accepts()
     {
-        var mission = BuildGood();
-        var collect = new JObject
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Salvage",
+            ["intent"]          = "gather_ore",
             ["required_amount"] = 10,
-            ["description"]     = "Recover salvage from the defended wreck.",
-            ["guards_faction"]  = "Marauders",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
-        Assert.Equal("Salvage",   obj.ItemCategory);
-        Assert.Equal("Marauders", obj.GuardsFaction);
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_GuardsFaction_Ore_HappyPath()
-    {
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Ore",
-            ["required_amount"] = 5,
-            ["description"]     = "Mine the contested field.",
-            ["guards_faction"]  = "Darkspacers",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
-        Assert.Equal("Darkspacers", obj.GuardsFaction);
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_NoGuardsFaction_LeavesFieldNull()
-    {
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Salvage",
-            ["required_amount"] = 3,
-            ["description"]     = "Undefended site.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
-        Assert.Null(obj.GuardsFaction);
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_GuardsFaction_OnRefinedProduct_Rejects()
-    {
-        // RefinedProduct has no POI to attach guards to — acquired via
-        // refinery/trader, not by flying to a spawn. Must be rejected.
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "RefinedProduct",
-            ["required_amount"] = 3,
-            ["description"]     = "Bring refined goods.",
-            ["guards_faction"]  = "Marauders",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_GuardsFaction_OnTradeGoods_Rejects()
-    {
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "TradeGoods",
-            ["required_amount"] = 3,
-            ["description"]     = "Haul cargo.",
-            ["guards_faction"]  = "Marauders",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_GuardsFaction_NotWhitelisted_Rejects()
-    {
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Salvage",
-            ["required_amount"] = 3,
-            ["description"]     = "Site.",
-            ["guards_faction"]  = "NotARealFaction",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_CollectItemTypes_GuardsFaction_FriendlyFaction_Rejects()
-    {
-        // Can't have TradingGuild defenders attacking the player — that's
-        // either a canon break or an accidental war. Same hostility rule
-        // as KillEnemies / ClearPoi.
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Salvage",
-            ["required_amount"] = 3,
-            ["description"]     = "Site.",
-            ["guards_faction"]  = "TradingGuild",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- Step-level: at most one POI-spawning objective ----------
-
-    [Fact]
-    public void Parse_Step_ClearPoiPlusCollectSalvage_Rejects()
-    {
-        // This is the exact shape that orphaned a POI in live play —
-        // ClearPoi + CollectItemTypes(Salvage) in one step competed for
-        // the step's single dynamicPointOfInterest slot.
-        var mission = BuildGood();
-        var clear = new JObject
-        {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear the combat zone.",
-        };
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Salvage",
-            ["required_amount"] = 5,
-            ["description"]     = "Recover salvage.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear, collect),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_Step_ClearPoiPlusCollectOre_Rejects()
-    {
-        var mission = BuildGood();
-        var clear = new JObject
-        {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear the asteroid approach.",
-        };
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Ore",
-            ["required_amount"] = 5,
             ["description"]     = "Mine the field.",
-        };
-        mission["steps"] = new JArray(new JObject
+        }));
+        var block  = Validator().Parse(m, Hostiles, Rep);
+        var intent = Assert.IsType<GatherOreIntent>(block.Steps[0].Intent);
+        Assert.Equal(10, intent.RequiredAmount);
+    }
+
+    [Fact]
+    public void Parse_GatherSalvage_Accepts()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["objectives"] = new JArray(clear, collect),
-        });
+            ["intent"]          = "gather_salvage",
+            ["required_amount"] = 12,
+            ["description"]     = "Strip the hulks.",
+        }));
+        var block = Validator().Parse(m, Hostiles, Rep);
+        Assert.IsType<GatherSalvageIntent>(block.Steps[0].Intent);
+    }
+
+    [Fact]
+    public void Parse_GatherOre_AmountOutOfRange_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]          = "gather_ore",
+            ["required_amount"] = 51,                // > max 50
+            ["description"]     = "d",
+        }));
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
+
+    // -------- defended_gather_* --------
+
+    [Fact]
+    public void Parse_DefendedGatherSalvage_Accepts()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]          = "defended_gather_salvage",
+            ["required_amount"] = 15,
+            ["guards_faction"]  = "Marauders",
+            ["description"]     = "Fight and loot.",
+        }));
+        var block  = Validator().Parse(m, Hostiles, Rep);
+        var intent = Assert.IsType<DefendedGatherSalvageIntent>(block.Steps[0].Intent);
+        Assert.Equal("Marauders", intent.GuardsFaction);
     }
 
     [Fact]
-    public void Parse_Step_ClearPoiPlusCollectTradeGoods_Allowed()
+    public void Parse_DefendedGatherOre_FriendlyGuards_Rejects()
     {
-        // TradeGoods doesn't spawn a POI, so the step still only has ONE
-        // POI-spawning objective (ClearPoi). Must be accepted.
-        var mission = BuildGood();
-        var clear = new JObject
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear the zone.",
-        };
-        var collect = new JObject
+            ["intent"]          = "defended_gather_ore",
+            ["required_amount"] = 10,
+            ["guards_faction"]  = "PoliceGuild",     // friendly rep=50
+            ["description"]     = "d",
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
+
+    // -------- deliver_to_station --------
+
+    [Fact]
+    public void Parse_DeliverToStation_Accepts()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "TradeGoods",
-            ["required_amount"] = 3,
-            ["description"]     = "Haul afterwards.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear, collect),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.Equal(2, block.Steps[0].Objectives.Count);
+            ["intent"]         = "deliver_to_station",
+            ["destination_id"] = "dest_0",
+            ["description"]    = "Courier run.",
+        }));
+        var block  = Validator().Parse(m, Hostiles, Rep,
+            accessibleDestinations: Destinations);
+        var intent = Assert.IsType<DeliverToStationIntent>(block.Steps[0].Intent);
+        Assert.Equal("dest_0", intent.DestinationShortId);
     }
 
     [Fact]
-    public void Parse_Steps_ClearPoiThenCollectSalvage_InSeparateSteps_Allowed()
+    public void Parse_DeliverToStation_UnknownDestination_Rejects()
     {
-        // The "multi-location" shape: fight here, loot there. Each step
-        // carries one POI. This is how vanilla multi-step missions work.
-        var mission = BuildGood();
-        var clear = new JObject
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear the escort.",
-        };
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Salvage",
-            ["required_amount"] = 5,
-            ["description"]     = "Then salvage the separate wreck.",
-        };
-        mission["steps"] = new JArray(
-            new JObject { ["objectives"] = new JArray(clear) },
-            new JObject { ["objectives"] = new JArray(collect) });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.Equal(2, block.Steps.Count);
+            ["intent"]         = "deliver_to_station",
+            ["destination_id"] = "dest_99",          // not in list
+            ["description"]    = "d",
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep,
+                accessibleDestinations: Destinations));
     }
 
-    // ---------- Forbidden-archetype enforcement ----------
+    [Fact]
+    public void Parse_DeliverToStation_EmptyDestinationList_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]         = "deliver_to_station",
+            ["destination_id"] = "dest_0",
+            ["description"]    = "d",
+        }));
+        // No accessible_destinations passed — degenerate pocket-system case.
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
+
+    // -------- haul_goods --------
 
     [Fact]
-    public void Parse_CombatForbidden_RejectsClearPoi()
+    public void Parse_HaulGoods_Accepts()
     {
-        var mission = BuildGood();
-        var clear = new JObject
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]          = "ClearPoi",
+            ["intent"]          = "haul_goods",
+            ["required_amount"] = 10,
+            ["destination_id"]  = "dest_1",
+            ["description"]     = "Haul the cargo.",
+        }));
+        var block  = Validator().Parse(m, Hostiles, Rep,
+            accessibleDestinations: Destinations);
+        var intent = Assert.IsType<HaulGoodsIntent>(block.Steps[0].Intent);
+        Assert.Equal(10, intent.RequiredAmount);
+        Assert.Equal("dest_1", intent.DestinationShortId);
+    }
+
+    [Fact]
+    public void Parse_HaulGoods_OverRange_Rejects()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]          = "haul_goods",
+            ["required_amount"] = 21,                // > haul cap 20
+            ["destination_id"]  = "dest_0",
+            ["description"]     = "d",
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep,
+                accessibleDestinations: Destinations));
+    }
+
+    // -------- forbidden_archetypes --------
+
+    [Fact]
+    public void Parse_CombatForbidden_BlocksClearCombatSite()
+    {
+        var m = ValidMission(steps: new JArray(new JObject
+        {
+            ["intent"]        = "clear_combat_site",
             ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear the zone.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear),
-        });
+            ["description"]   = "d",
+        }));
         var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
-                                    forbiddenArchetypes: new[] { "combat" }));
+            () => Validator().Parse(m, Hostiles, Rep,
+                forbiddenArchetypes: new[] { "combat" }));
         Assert.Contains("combat", ex.Message);
     }
 
     [Fact]
-    public void Parse_CombatForbidden_RejectsKillEnemies()
+    public void Parse_CombatForbidden_BlocksDefendedGather()
     {
-        var mission = BuildGood();
-        var kill = new JObject
+        // defended_* is composite (combat+gather); combat in forbidden
+        // list must still block it.
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]            = "KillEnemies",
-            ["enemy_faction"]   = "Marauders",
-            ["required_amount"] = 3,
-            ["description"]     = "Kill three.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(kill),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
-                                    forbiddenArchetypes: new[] { "combat" }));
-    }
-
-    [Fact]
-    public void Parse_CombatForbidden_RejectsGuardsFactionOnCollect()
-    {
-        // The original scenario C bug — LLM kept attaching guards_faction
-        // to a gather mission even when combat was in forbidden_archetypes.
-        // Now validator rejects, so the backstop is mechanical.
-        var mission = BuildGood();
-        var collect = new JObject
-        {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Ore",
+            ["intent"]          = "defended_gather_salvage",
             ["required_amount"] = 10,
-            ["description"]     = "Mine the field.",
             ["guards_faction"]  = "Marauders",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
-                                    forbiddenArchetypes: new[] { "combat" }));
-        Assert.Contains("guards_faction", ex.Message);
-        Assert.Contains("combat", ex.Message);
+            ["description"]     = "d",
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep,
+                forbiddenArchetypes: new[] { "combat" }));
     }
 
     [Fact]
-    public void Parse_CombatForbidden_AllowsPlainCollect()
+    public void Parse_GatherForbidden_BlocksHaulGoods()
     {
-        // Without guards_faction, Ore/Salvage collects are pure gather —
-        // allowed even when combat is forbidden.
-        var mission = BuildGood();
-        var collect = new JObject
+        // haul_goods is composite (gather+deliver); gather in forbidden
+        // list must still block it.
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]            = "CollectItemTypes",
-            ["item_category"]   = "Ore",
+            ["intent"]          = "haul_goods",
             ["required_amount"] = 10,
-            ["description"]     = "Mine the field, no defenders.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(collect),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
-                                      forbiddenArchetypes: new[] { "combat" });
-        var obj = Assert.IsType<LlmCollectItemTypes>(block.Steps[0].Objectives[0]);
-        Assert.Null(obj.GuardsFaction);
-    }
-
-    [Fact]
-    public void Parse_EscortForbidden_RejectsProtectUnit()
-    {
-        var mission = BuildGood();
-        var protect = new JObject
-        {
-            ["type"]         = "ProtectUnit",
-            ["protect_text"] = "Keep the freighter alive.",
-        };
-        // Pair with a non-ProtectUnit to satisfy the "mission must have at
-        // least one non-ProtectUnit" rule — irrelevant here since validator
-        // rejects on the forbidden check first, but keeps the mission
-        // otherwise well-formed.
-        var trigger = new JObject
-        {
-            ["type"]            = "TriggerObjective",
-            ["trigger"]         = "ArrivedAtSpaceStation",
-            ["required_amount"] = 1,
-            ["description"]     = "Arrive.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(protect, trigger),
-        });
+            ["destination_id"]  = "dest_0",
+            ["description"]     = "d",
+        }));
         Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
-                                    forbiddenArchetypes: new[] { "escort" }));
+            () => Validator().Parse(m, Hostiles, Rep,
+                forbiddenArchetypes: new[] { "gather" },
+                accessibleDestinations: Destinations));
     }
 
     [Fact]
-    public void Parse_NoForbiddenList_DefaultsToAllAllowed()
+    public void Parse_CombatForbidden_AllowsPeacefulGather()
     {
-        // Backwards compat: passing null or omitting forbiddenArchetypes
-        // lets every archetype through, matching pre-forbidden behavior.
-        var mission = BuildGood();
-        var clear = new JObject
+        var m = ValidMission(steps: new JArray(new JObject
         {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear),
-        });
-        // Both nullable + omitted work.
-        var block1 = Validator().Parse(mission, Hostiles, NeutralAndHostileRep,
-                                        forbiddenArchetypes: null);
-        Assert.IsType<LlmClearPoi>(block1.Steps[0].Objectives[0]);
-        var block2 = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.IsType<LlmClearPoi>(block2.Steps[0].Objectives[0]);
+            ["intent"]          = "gather_ore",
+            ["required_amount"] = 10,
+            ["description"]     = "d",
+        }));
+        var block = Validator().Parse(m, Hostiles, Rep,
+            forbiddenArchetypes: new[] { "combat" });
+        Assert.IsType<GatherOreIntent>(block.Steps[0].Intent);
     }
 
-    // ---------- ClearPoi ----------
+    // -------- multi-step --------
 
     [Fact]
-    public void Parse_ClearPoi_HappyPath()
+    public void Parse_MultiStep_CombatThenSalvage_Accepts()
     {
-        var mission = BuildGood();
-        var clear = new JObject
-        {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "Marauders",
-            ["description"]   = "Clear the field.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var obj = Assert.IsType<LlmClearPoi>(block.Steps[0].Objectives[0]);
-        Assert.Equal("Marauders", obj.EnemyFaction);
-        Assert.Equal("Clear the field.", obj.Description);
-    }
-
-    [Fact]
-    public void Parse_ClearPoi_FriendlyFaction_Rejects()
-    {
-        var mission = BuildGood();
-        var clear = new JObject
-        {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "TradingGuild",  // rep 100, friendly
-            ["description"]   = "Bad target.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("not hostile", ex.Message);
-    }
-
-    [Fact]
-    public void Parse_ClearPoi_UnknownFaction_Rejects()
-    {
-        var mission = BuildGood();
-        var clear = new JObject
-        {
-            ["type"]          = "ClearPoi",
-            ["enemy_faction"] = "NotAFaction",
-            ["description"]   = "Clear.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_ClearPoi_NoRequiredAmountField()
-    {
-        // ClearPoi must NOT carry a required_amount — the spawn's totalUnitCount
-        // supplies it. An extra key is a strict-schema violation.
-        var mission = BuildGood();
-        var clear = new JObject
-        {
-            ["type"]            = "ClearPoi",
-            ["enemy_faction"]   = "Marauders",
-            ["required_amount"] = 3,
-            ["description"]     = "Clear.",
-        };
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(clear),
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- Per-step combat-objective cap ----------
-
-    [Fact]
-    public void Parse_Step_WithBothClearPoiAndKillEnemies_Rejects()
-    {
-        // Guardrail: ClearPoi + KillEnemies in the same step is the redundant
-        // double-tracking pattern observed in live testing. Reject.
-        var mission = BuildGood();
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(
-                new JObject
-                {
-                    ["type"]          = "ClearPoi",
-                    ["enemy_faction"] = "Marauders",
-                    ["description"]   = "Clear the zone.",
-                },
-                new JObject
-                {
-                    ["type"]            = "KillEnemies",
-                    ["enemy_faction"]   = "Marauders",
-                    ["required_amount"] = 3,
-                    ["description"]     = "Hunt stragglers.",
-                }),
-        });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("at most one", ex.Message);
-    }
-
-    [Fact]
-    public void Parse_Step_ClearPoiPlusNonCombat_Accepted()
-    {
-        // ClearPoi paired with a non-combat objective is fine — e.g. clear
-        // the zone then dock with the station.
-        var mission = BuildGood();
-        mission["steps"] = new JArray(new JObject
-        {
-            ["objectives"] = new JArray(
-                new JObject
-                {
-                    ["type"]          = "ClearPoi",
-                    ["enemy_faction"] = "Marauders",
-                    ["description"]   = "Clear the zone.",
-                },
-                new JObject
-                {
-                    ["type"]            = "TriggerObjective",
-                    ["trigger"]         = "DockedWithSpaceStation",
-                    ["required_amount"] = 1,
-                    ["description"]     = "Return and dock.",
-                }),
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.Equal(2, block.Steps[0].Objectives.Count);
-    }
-
-    // ---------- Rewards per-type rules ----------
-
-    [Fact]
-    public void Parse_CreditsReward_HappyPath()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]       = "Credits",
-            ["base_value"] = 100,
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var credits = Assert.IsType<LlmCreditsReward>(block.Rewards[0]);
-        Assert.Equal(100, credits.BaseValue);
-    }
-
-    [Fact]
-    public void Parse_CreditsReward_BaseValueTooLow_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]       = "Credits",
-            ["base_value"] = 5,
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_CreditsReward_BaseValueTooHigh_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]       = "Credits",
-            ["base_value"] = 201,
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_ExperienceReward_BaseValueTooHigh_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]       = "Experience",
-            ["base_value"] = 151,
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_ReputationReward_HappyPath_Negative()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]    = "Reputation",
-            ["faction"] = "Marauders",
-            ["amount"]  = -200,
-        });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        var rep = Assert.IsType<LlmReputationReward>(block.Rewards[0]);
-        Assert.Equal(-200, rep.Amount);
-    }
-
-    [Fact]
-    public void Parse_ReputationReward_AmountOutOfRange_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]    = "Reputation",
-            ["faction"] = "TradingGuild",
-            ["amount"]  = 501,
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_ReputationReward_FactionUnknown_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]    = "Reputation",
-            ["faction"] = "NotAFaction",
-            ["amount"]  = 50,
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_RewardsEmpty_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray();
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_RewardsTooMany_Rejects()
-    {
-        var mission = BuildGood();
-        var six = new JArray();
-        for (var i = 0; i < 6; i++)
-            six.Add(new JObject { ["type"] = "Credits", ["base_value"] = 50 });
-        mission["rewards"] = six;
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    [Fact]
-    public void Parse_RewardUnknownType_Rejects()
-    {
-        var mission = BuildGood();
-        mission["rewards"] = new JArray(new JObject
-        {
-            ["type"]   = "Item",
-            ["amount"] = 1,
-        });
-        Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-    }
-
-    // ---------- Global coherence: degenerate mission ----------
-
-    [Fact]
-    public void Parse_OnlyProtectUnitAcrossAllSteps_Rejects()
-    {
-        var mission = BuildGood();
-        var protect1 = new JObject { ["type"] = "ProtectUnit", ["protect_text"] = "a" };
-        var protect2 = new JObject { ["type"] = "ProtectUnit", ["protect_text"] = "b" };
-        mission["steps"] = new JArray(
-            new JObject { ["objectives"] = new JArray(protect1) },
-            new JObject { ["objectives"] = new JArray(protect2) });
-        var ex = Assert.Throws<LlmValidationException>(
-            () => Validator().Parse(mission, Hostiles, NeutralAndHostileRep));
-        Assert.Contains("degenerate", ex.Message, System.StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Parse_MixedProtectAndKill_Accepted()
-    {
-        var mission = BuildGood();
-        var protect = new JObject { ["type"] = "ProtectUnit", ["protect_text"] = "guard" };
-        var kill    = BuildKillObj("Marauders", 2);
-        mission["steps"] = new JArray(
-            new JObject { ["objectives"] = new JArray(protect) },
-            new JObject { ["objectives"] = new JArray(kill) });
-        var block = Validator().Parse(mission, Hostiles, NeutralAndHostileRep);
-        Assert.Equal(2, block.Steps.Count);
-    }
-
-    // ---------- Helpers ----------
-
-    /// <summary>Builds a minimal valid mission block (one KillEnemies step,
-    /// one Credits reward) that every "modify-and-reject" test starts from.</summary>
-    private static JObject BuildGood()
-    {
-        return new JObject
-        {
-            ["name"]            = "Test Mission",
-            ["description"]     = "A test.",
-            ["completion_text"] = "Nice work.",
-            ["source_faction"]  = "TradingGuild",
-            ["steps"]           = new JArray(BuildStep()),
-            ["rewards"]         = new JArray(new JObject
+        var m = ValidMission(steps: new JArray(
+            new JObject
             {
-                ["type"]       = "Credits",
-                ["base_value"] = 50,
-            }),
-        };
+                ["intent"]        = "clear_combat_site",
+                ["enemy_faction"] = "Marauders",
+                ["description"]   = "Clear.",
+            },
+            new JObject
+            {
+                ["intent"]          = "gather_salvage",
+                ["required_amount"] = 10,
+                ["description"]     = "Loot.",
+            }));
+        var block = Validator().Parse(m, Hostiles, Rep);
+        Assert.Equal(2, block.Steps.Count);
+        Assert.IsType<ClearCombatSiteIntent>(block.Steps[0].Intent);
+        Assert.IsType<GatherSalvageIntent>(block.Steps[1].Intent);
     }
 
-    private static JObject BuildStep()
+    // -------- rewards --------
+
+    [Fact]
+    public void Parse_NoRewards_Rejects()
     {
-        return new JObject
+        var m = ValidMission(rewards: new JArray());
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
+
+    [Fact]
+    public void Parse_SixRewards_Rejects()
+    {
+        var r = new JObject { ["type"] = "Credits", ["base_value"] = 20 };
+        var m = ValidMission(rewards: new JArray(
+            r, r.DeepClone(), r.DeepClone(), r.DeepClone(), r.DeepClone(), r.DeepClone()));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
+
+    [Fact]
+    public void Parse_CreditsRewardOutOfRange_Rejects()
+    {
+        var m = ValidMission(rewards: new JArray(new JObject
         {
-            ["objectives"] = new JArray(BuildKillObj("Marauders", 1)),
-        };
+            ["type"] = "Credits", ["base_value"] = 101,
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 
-    private static JObject BuildKillObj(string faction, int amount) => new()
+    [Fact]
+    public void Parse_ReputationReward_UnknownFaction_Rejects()
     {
-        ["type"]            = "KillEnemies",
-        ["enemy_faction"]   = faction,
-        ["required_amount"] = amount,
-        ["description"]     = "Take them out.",
-    };
+        var m = ValidMission(rewards: new JArray(new JObject
+        {
+            ["type"] = "Reputation", ["faction"] = "Fakers", ["amount"] = 200,
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
+    }
 
-    private static JObject BuildTriggerObj() => new()
+    [Fact]
+    public void Parse_ItemReward_MiningClaim_Accepts()
     {
-        ["type"]            = "TriggerObjective",
-        ["trigger"]         = "DockedWithSpaceStation",
-        ["required_amount"] = 1,
-        ["description"]     = "Dock.",
-    };
+        var m = ValidMission(rewards: new JArray(new JObject
+        {
+            ["type"] = "Item", ["kind"] = "MiningClaim",
+        }));
+        var block = Validator().Parse(m, Hostiles, Rep);
+        var item  = Assert.IsType<LlmItemReward>(block.Rewards[0]);
+        Assert.Equal("MiningClaim", item.Kind);
+    }
 
-    private static JObject BuildWithoutField(string field)
+    [Fact]
+    public void Parse_ItemReward_UnknownKind_Rejects()
     {
-        var m = BuildGood();
-        m.Remove(field);
-        return m;
+        var m = ValidMission(rewards: new JArray(new JObject
+        {
+            ["type"] = "Item", ["kind"] = "DeathStar",
+        }));
+        Assert.Throws<LlmValidationException>(
+            () => Validator().Parse(m, Hostiles, Rep));
     }
 }

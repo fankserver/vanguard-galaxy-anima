@@ -49,13 +49,12 @@ public class SidecarSchemaRoundtripTests
         // Prove concrete subtypes roundtrip — the whole point of
         // TypeNameHandling.Auto. Without a $type discriminator on the wire,
         // these abstract-base fields would fail to reinstantiate as their
-        // concrete subtype on read. Load-bearing guard: if someone later
-        // drops TypeNameHandling.Auto, these assertions fail loudly.
-        var objective = parsed.Entries[0].MissionBlock.Steps[0].Objectives[0];
-        var trigger = Assert.IsType<LlmTriggerObjective>(objective);
-        Assert.Equal("DockedWithSpaceStation", trigger.Trigger);
-        Assert.Equal(1, trigger.RequiredAmount);
-        Assert.Equal("Dock.", trigger.Description);
+        // concrete subtype on read. Load-bearing guard: if someone drops
+        // TypeNameHandling.Auto, these assertions fail loudly.
+        var intent = parsed.Entries[0].MissionBlock.Steps[0].Intent;
+        var gather = Assert.IsType<GatherOreIntent>(intent);
+        Assert.Equal(10, gather.RequiredAmount);
+        Assert.Equal("Mine.", gather.Description);
 
         var reward = parsed.Entries[0].MissionBlock.Rewards[0];
         var credits = Assert.IsType<LlmCreditsReward>(reward);
@@ -106,7 +105,7 @@ public class SidecarSchemaRoundtripTests
         // If the binder rejects List<T>, DeserializeObject throws JsonSerializationException.
         // Reaching here means the binder accepted the List<T> shapes.
         Assert.Single(parsed.Entries);
-        Assert.IsType<LlmCollectItemTypes>(parsed.Entries[0].MissionBlock.Steps[0].Objectives[0]);
+        Assert.IsType<GatherSalvageIntent>(parsed.Entries[0].MissionBlock.Steps[0].Intent);
         Assert.IsType<LlmCreditsReward>(parsed.Entries[0].MissionBlock.Rewards[0]);
         Assert.NotEmpty(parsed.Entries[0].Broker.Story.Pitch);
     }
@@ -118,10 +117,7 @@ public class SidecarSchemaRoundtripTests
         Name: "Test", Description: "d", CompletionText: "c", SourceFaction: "TradingGuild",
         Steps: new[]
         {
-            new LlmMissionStep(new LlmObjective[]
-            {
-                new LlmTriggerObjective("DockedWithSpaceStation", 1, "Dock."),
-            }),
+            new LlmMissionStep(new GatherOreIntent(10, "Mine.")),
         },
         Rewards: new LlmReward[] { new LlmCreditsReward(50) });
 
@@ -141,10 +137,7 @@ public class SidecarSchemaRoundtripTests
         Description: "d", CompletionText: "c", SourceFaction: "TradingGuild",
         Steps: new List<LlmMissionStep>
         {
-            new(new List<LlmObjective>
-            {
-                new LlmCollectItemTypes(ItemCategory: "RefinedProduct", RequiredAmount: 10, Description: "collect"),
-            }),
+            new(new GatherSalvageIntent(RequiredAmount: 10, Description: "strip")),
         },
         Rewards: new List<LlmReward>
         {

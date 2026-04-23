@@ -22,10 +22,7 @@ public class LlmMissionAssignerTests
         Name: "Test", Description: "d", CompletionText: "c", SourceFaction: "TradingGuild",
         Steps: new[]
         {
-            new LlmMissionStep(new LlmObjective[]
-            {
-                new LlmTriggerObjective("DockedWithSpaceStation", 1, "Dock."),
-            }),
+            new LlmMissionStep(new GatherOreIntent(10, "Mine.")),
         },
         Rewards: new LlmReward[] { new LlmCreditsReward(50) });
 

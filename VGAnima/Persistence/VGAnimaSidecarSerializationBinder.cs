@@ -8,13 +8,20 @@ namespace VGAnima.Persistence;
 
 /// <summary>Allowlisting binder for <see cref="Newtonsoft.Json.TypeNameHandling.Auto"/>
 /// used by <see cref="SidecarSchema.SerializerSettings"/>. Only the persisted
-/// <see cref="LlmObjective"/> and <see cref="LlmReward"/> subtypes can be
+/// <see cref="LlmIntent"/> and <see cref="LlmReward"/> subtypes can be
 /// reinstantiated on read; anything else throws.
 ///
 /// <para>Load-bearing: sidecars travel with saves (cloud-sync, share,
 /// modpack distribution) so input isn't guaranteed user-authored. Without
 /// this binder, a crafted JSON could instantiate arbitrary types via
-/// Newtonsoft's well-known gadget chains.</para></summary>
+/// Newtonsoft's well-known gadget chains.</para>
+///
+/// <para>v2 schema break: v1 sidecars with <c>$type</c> refs to
+/// <c>LlmKillEnemies</c> / <c>LlmProtectUnit</c> / <c>LlmClearPoi</c> /
+/// <c>LlmCollectItemTypes</c> / <c>LlmTriggerObjective</c> will hit a
+/// <c>JsonSerializationException</c> here when loading. <see cref="SidecarIO.Read"/>
+/// catches that as <c>SidecarReadStatus.Corrupted</c> and quarantines the
+/// file — functionally identical to the planned v1→v2 hard cut.</para></summary>
 internal sealed class VGAnimaSidecarSerializationBinder : ISerializationBinder
 {
     public static readonly VGAnimaSidecarSerializationBinder Instance = new();
@@ -33,26 +40,29 @@ internal sealed class VGAnimaSidecarSerializationBinder : ISerializationBinder
     // list in the same commit that adds the subtype.
     private static readonly Type[] AllowedTypes = new[]
     {
-        // Concrete objective / reward subtypes (the whole point of TypeNameHandling.Auto).
-        typeof(LlmKillEnemies),
-        typeof(LlmProtectUnit),
-        typeof(LlmTriggerObjective),
-        typeof(LlmCollectItemTypes),
-        typeof(LlmClearPoi),
+        // Concrete intent subtypes — the v2 narrative vocabulary. One
+        // entry per IntentWhitelist id.
+        typeof(ClearCombatSiteIntent),
+        typeof(GatherOreIntent),
+        typeof(GatherSalvageIntent),
+        typeof(DefendedGatherOreIntent),
+        typeof(DefendedGatherSalvageIntent),
+        typeof(DeliverToStationIntent),
+        typeof(HaulGoodsIntent),
+        // Reward subtypes — unchanged from v1.
         typeof(LlmCreditsReward),
         typeof(LlmExperienceReward),
         typeof(LlmReputationReward),
+        typeof(LlmItemReward),
         // Collection shapes — array variants (test fixtures built with `new[]`).
         typeof(LlmMissionStep[]),
-        typeof(LlmObjective[]),
         typeof(LlmReward[]),
         typeof(string[]),
-        // Collection shapes — List<T> variants (production JSON deserialization
-        // of `IReadOnlyList<T>` fields defaults to `List<T>`). This is what
-        // real LLM-derived LlmMissionBlocks carry; without these four, the
-        // binder rejects its own output on round-trip.
+        // Collection shapes — List<T> variants (production JSON
+        // deserialization of `IReadOnlyList<T>` fields defaults to
+        // `List<T>`). Without these, the binder rejects its own output
+        // on round-trip.
         typeof(List<LlmMissionStep>),
-        typeof(List<LlmObjective>),
         typeof(List<LlmReward>),
         typeof(List<string>),
     };

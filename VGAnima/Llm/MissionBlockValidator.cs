@@ -4,62 +4,62 @@ using Newtonsoft.Json.Linq;
 
 namespace VGAnima.Llm;
 
-/// <summary>Validates the <c>mission</c> sub-object of a v2-mission LLM
-/// response. Called by <see cref="ResponseValidator"/> after the dialogue
-/// block passes. Rule ordering mirrors spec §5 exactly — first failure
-/// raises <see cref="LlmValidationException"/>.
+/// <summary>Validates the <c>mission</c> sub-object of an LLM response and
+/// produces a typed <see cref="LlmMissionBlock"/>. Called by
+/// <see cref="ResponseValidator"/> after the dialogue block passes. First
+/// failure raises <see cref="LlmValidationException"/> with a specific
+/// error message.
 ///
-/// Cross-context inputs (<paramref name="atWar"/> and
-/// <paramref name="reputation"/>) drive the enemy_faction coherence rule
-/// (spec §3 — reject KillEnemies against a currently-friendly faction).
-/// Callers (the orchestrator in Task 6) thread them through from the same
-/// <see cref="LlmContext"/> that was sent to the LLM.</summary>
+/// <para>v2 is intent-based: each step carries ONE intent from the closed
+/// <see cref="IntentWhitelist"/>, the validator checks the intent-specific
+/// field set, and the factory owns all mechanical translation. This
+/// structurally eliminates the v1 bug class where LLM-authored
+/// <c>KillEnemies</c> shipped without a POI — intents ARE the POI shape;
+/// they can't be emitted without it.</para>
+///
+/// <para>Cross-context inputs thread through:
+/// <list type="bullet">
+///   <item><paramref name="atWar"/> + <paramref name="reputation"/> —
+///     hostility check for enemy_faction / guards_faction. Mirrors
+///     vanilla <c>FactionData.IsEnemy</c>: hostile iff at_war OR rep &lt; -500.</item>
+///   <item><paramref name="forbiddenArchetypes"/> — mechanical enforcement
+///     of <c>mission_guidance.forbidden_archetypes</c>. An intent is
+///     rejected if any of its archetypes (see
+///     <see cref="IntentWhitelist.Archetypes"/>) is forbidden.</item>
+///   <item><paramref name="accessibleDestinations"/> — whitelist of
+///     destination ids the LLM may reference. Intents that need a
+///     destination (<c>deliver_to_station</c> / <c>haul_goods</c>) must
+///     pick from this set; anything else is rejected.</item>
+/// </list></para></summary>
 internal sealed class MissionBlockValidator
 {
-    // Hard max lengths — enforced by the validator; input over these bounces.
-    // Exposed as internal so the prompt builder can reference the soft
-    // counterparts below.
     internal const int NameMaxLen           = 60;
     internal const int DescriptionMaxLen    = 500;
     internal const int CompletionTextMaxLen = 200;
-    // Bumped from 80 → 120 after live testing: naturally-written objective
-    // descriptions land at 84–100 chars regularly ("Travel to the hostile
-    // signature and destroy all Corsair Syndicate ships in the area." = 84).
-    // 120 matches the dialogue-line limit so there's one budget to remember.
     internal const int ObjDescriptionMaxLen = 120;
-    internal const int ProtectTextMaxLen    = 120;
 
-    // Soft max lengths — advertised in the prompt. ~10% under the hard
-    // limit gives the LLM headroom so occasional miscount-by-a-few-chars
-    // still fits under the validator. Integer math rounds down, which is
-    // what we want (never exceed the hard limit, even after rounding).
     internal const int NameSoftMaxLen           = NameMaxLen           * 9 / 10;  // 54
     internal const int DescriptionSoftMaxLen    = DescriptionMaxLen    * 9 / 10;  // 450
     internal const int CompletionTextSoftMaxLen = CompletionTextMaxLen * 9 / 10;  // 180
     internal const int ObjDescriptionSoftMaxLen = ObjDescriptionMaxLen * 9 / 10;  // 108
-    internal const int ProtectTextSoftMaxLen    = ProtectTextMaxLen    * 9 / 10;  // 108
 
-    private const int KillRequiredMin      = 1;
-    private const int KillRequiredMax      = 5;
-    private const int TriggerRequiredMin   = 1;
-    private const int TriggerRequiredMax   = 3;
-    private const int CollectRequiredMin   = 1;
-    private const int CollectRequiredMax   = 50;
+    // Compat shim — v1's prompt still references this constant. v2 has no
+    // ProtectUnit/escort intent so it's semantically dead, but keeping it
+    // lets the BarRefreshPatches prompt compile through the schema
+    // rewrite without needing a coordinated edit in the same commit.
+    // Dropped once the prompt rewrite lands.
+    internal const int ProtectTextSoftMaxLen    = ObjDescriptionSoftMaxLen;
 
-    // Internal so the context gatherer can surface these to the LLM prompt
-    // (DRY — single source of truth for both validation and prompt clamps).
-    //
-    // Bounds mirror vanilla's procedural + SideMissions envelope so broker
-    // rewards fit alongside vanilla's mission board. Evidence (decompile of
-    // MissionGenerator.AddRewards + SideMissions, 2026-04-21):
-    //   - Procedural base_value after per-objective multiplier: 20..50
-    //     (MineOre=30, Courier=24, Kill/Escort/Clear=40, + 0.8..1.25 noise)
-    //   - SideMissions story bases: 50 or 100 flat
-    //   - Skilltree gate missions: 200 (out of scope for brokers)
-    //   - Umbral/Conquest endgame: 100..20k (out of scope for brokers)
-    // XP bases: Sqrt(difficulty) * 50 = 40..122 across Easy..Insane; SideMissions
-    // uses 50 or 100 flat. Rep: procedural picks from {200,250,300,350};
-    // SideMissions=400. Broker missions target the overlap.
+    private const int GatherRequiredMin   = 1;
+    private const int GatherRequiredMax   = 50;
+    private const int HaulRequiredMin     = 1;
+    // Trade goods are bulkier than ore/salvage — cap at 20 to match
+    // vanilla's EscortMissionItem0 (20 units, decomp line 46575).
+    private const int HaulRequiredMax     = 20;
+
+    // Reward clamps — unchanged from v1. Bounds mirror vanilla's
+    // procedural + SideMissions envelope so broker rewards fit alongside
+    // vanilla's mission board.
     internal const int CreditsBaseMin       =  15;
     internal const int CreditsBaseMax       = 100;
     internal const int ExperienceBaseMin    =  30;
@@ -77,30 +77,27 @@ internal sealed class MissionBlockValidator
         JToken mission,
         IReadOnlyList<string> atWar,
         IReadOnlyDictionary<string, int> reputation,
-        IReadOnlyList<string>? forbiddenArchetypes = null)
+        IReadOnlyList<string>? forbiddenArchetypes = null,
+        IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
-        // Rule 1.
         if (mission == null || mission.Type != JTokenType.Object)
             throw new LlmValidationException(
                 $"field `mission` must be a json object, got {(mission == null ? "null" : mission.Type.ToString())}");
 
         var obj = (JObject)mission;
 
-        // Rule 2: strict field set.
         foreach (var prop in obj.Properties())
             if (!MissionKeys.Contains(prop.Name))
                 throw new LlmValidationException(
-                    $"unexpected field `mission.{prop.Name}` (v2-mission schema is strict)");
+                    $"unexpected field `mission.{prop.Name}` (schema is strict)");
         foreach (var required in MissionKeys)
             if (!obj.ContainsKey(required))
                 throw new LlmValidationException($"missing field `mission.{required}`");
 
-        // Rule 3: string caps + ASCII.
         var name           = ReadString(obj, "mission.name",            NameMaxLen);
         var description    = ReadString(obj, "mission.description",     DescriptionMaxLen);
         var completionText = ReadString(obj, "mission.completion_text", CompletionTextMaxLen);
 
-        // Rule 4: source_faction whitelist.
         var sourceFactionTok = obj["source_faction"]!;
         if (sourceFactionTok.Type != JTokenType.String)
             throw new LlmValidationException("field `mission.source_faction` must be a string");
@@ -109,27 +106,11 @@ internal sealed class MissionBlockValidator
             throw new LlmValidationException(
                 $"field `mission.source_faction` must be a whitelisted faction, got \"{sourceFaction}\"");
 
-        // Pre-compute forbidden flags once so every objective parser can
-        // check O(1) instead of re-scanning the list. These are the only
-        // archetype-level rules that have a mechanical validator backstop;
-        // other forbidden archetypes (gather/salvage/deliver) stay as soft
-        // prompt guidance since they're usually context hints, not hard
-        // constraints.
-        var forbidden       = forbiddenArchetypes ?? System.Array.Empty<string>();
-        var combatForbidden = forbidden.Contains("combat");
-        var escortForbidden = forbidden.Contains("escort");
+        var forbidden    = forbiddenArchetypes ?? System.Array.Empty<string>();
+        var destinations = accessibleDestinations ?? System.Array.Empty<AccessibleDestination>();
 
-        // Rule 5: steps array, 1..3.
-        var steps = ReadSteps(obj, atWar, reputation, combatForbidden, escortForbidden);
-
-        // Rule 8: rewards array, 1..5.
+        var steps   = ReadSteps(obj, atWar, reputation, forbidden, destinations);
         var rewards = ReadRewards(obj);
-
-        // Rule 9: global coherence — at least one non-ProtectUnit objective.
-        if (!AnyNonProtectObjective(steps))
-            throw new LlmValidationException(
-                "mission is degenerate: every objective is ProtectUnit (need at least one "
-                + "KillEnemies / TriggerObjective / CollectItemTypes)");
 
         return new LlmMissionBlock(
             Name:           name,
@@ -167,8 +148,8 @@ internal sealed class MissionBlockValidator
         JObject obj,
         IReadOnlyList<string> atWar,
         IReadOnlyDictionary<string, int> reputation,
-        bool combatForbidden = false,
-        bool escortForbidden = false)
+        IReadOnlyList<string> forbidden,
+        IReadOnlyList<AccessibleDestination> destinations)
     {
         var stepsTok = obj["steps"]!;
         if (stepsTok.Type != JTokenType.Array)
@@ -185,274 +166,169 @@ internal sealed class MissionBlockValidator
             if (step.Type != JTokenType.Object)
                 throw new LlmValidationException(
                     $"field `mission.steps[{i}]` must be an object");
-            var stepObj = (JObject)step;
-            foreach (var prop in stepObj.Properties())
-                if (prop.Name != "objectives")
-                    throw new LlmValidationException(
-                        $"unexpected field `mission.steps[{i}].{prop.Name}`");
-            if (!stepObj.ContainsKey("objectives"))
-                throw new LlmValidationException(
-                    $"missing field `mission.steps[{i}].objectives`");
-
-            var objsTok = stepObj["objectives"]!;
-            if (objsTok.Type != JTokenType.Array)
-                throw new LlmValidationException(
-                    $"field `mission.steps[{i}].objectives` must be an array");
-            var objsArr = (JArray)objsTok;
-            if (objsArr.Count < 1 || objsArr.Count > 2)
-                throw new LlmValidationException(
-                    $"field `mission.steps[{i}].objectives` must have 1..2 elements, got {objsArr.Count}");
-
-            var objectives = new List<LlmObjective>(objsArr.Count);
-            for (var j = 0; j < objsArr.Count; j++)
-                objectives.Add(ParseObjective(
-                    objsArr[j], i, j, atWar, reputation,
-                    combatForbidden, escortForbidden));
-
-            // Within a step, at most one combat objective. ClearPoi and
-            // KillEnemies use parallel tracking (POI-bound vs faction-wide),
-            // mixing them produces a "main mission done + loose stragglers"
-            // shape that's confusing for players. The prompt discourages it;
-            // this rule enforces it.
-            var combatCount = objectives.Count(o => o is LlmClearPoi or LlmKillEnemies);
-            if (combatCount > 1)
-                throw new LlmValidationException(
-                    $"field `mission.steps[{i}].objectives` has {combatCount} combat objectives; " +
-                    $"at most one of ClearPoi or KillEnemies per step");
-
-            // Within a step, at most one POI-spawning objective. A step
-            // has a single `dynamicPointOfInterest` slot — if two objectives
-            // both spawn a POI, the second overwrites the first and leaves
-            // the first POI orphaned on the system map (no Locate target,
-            // no cleanup on mission complete). Happened live with a
-            // CollectItemTypes(Salvage) + ClearPoi(Marauders) mission that
-            // pointed Locate at the cleared combat zone with no path to
-            // the salvage field. For "defended site" missions the LLM
-            // should use CollectItemTypes with `guards_faction` set
-            // instead (one POI with embedded defenders, vanilla's
-            // SalvageWreck pattern). For "clear zone here, gather
-            // elsewhere" missions the LLM should use two separate steps.
-            bool IsPoiSpawning(LlmObjective o) =>
-                o is LlmClearPoi
-                || (o is LlmCollectItemTypes c
-                    && (c.ItemCategory == "Ore" || c.ItemCategory == "Salvage"));
-            var poiCount = objectives.Count(IsPoiSpawning);
-            if (poiCount > 1)
-                throw new LlmValidationException(
-                    $"field `mission.steps[{i}].objectives` has {poiCount} POI-spawning objectives; " +
-                    $"a step can only track one POI via its Locate button. " +
-                    $"For a defended gather site, use CollectItemTypes with guards_faction set " +
-                    $"instead of a separate ClearPoi; for multi-location missions, split into " +
-                    $"separate steps.");
-
-            steps.Add(new LlmMissionStep(objectives));
+            var intent = ParseIntent((JObject)step, i, atWar, reputation, forbidden, destinations);
+            steps.Add(new LlmMissionStep(intent));
         }
         return steps;
     }
 
-    private LlmObjective ParseObjective(
-        JToken tok, int stepIdx, int objIdx,
+    private LlmIntent ParseIntent(
+        JObject obj, int stepIdx,
         IReadOnlyList<string> atWar,
         IReadOnlyDictionary<string, int> reputation,
-        bool combatForbidden = false,
-        bool escortForbidden = false)
+        IReadOnlyList<string> forbidden,
+        IReadOnlyList<AccessibleDestination> destinations)
     {
-        var path = $"mission.steps[{stepIdx}].objectives[{objIdx}]";
-        if (tok.Type != JTokenType.Object)
-            throw new LlmValidationException($"field `{path}` must be an object");
-        var obj = (JObject)tok;
+        var path = $"mission.steps[{stepIdx}]";
 
-        var typeTok = obj["type"];
-        if (typeTok == null || typeTok.Type != JTokenType.String)
-            throw new LlmValidationException($"field `{path}.type` missing or not a string");
-        var type = typeTok.Value<string>() ?? string.Empty;
-        if (!ObjectiveTypeWhitelist.Contains(type))
+        var intentTok = obj["intent"];
+        if (intentTok == null || intentTok.Type != JTokenType.String)
             throw new LlmValidationException(
-                $"field `{path}.type` must be a whitelisted objective type, got \"{type}\"");
+                $"field `{path}.intent` missing or not a string");
+        var intent = intentTok.Value<string>() ?? string.Empty;
+        if (!IntentWhitelist.Contains(intent))
+            throw new LlmValidationException(
+                $"field `{path}.intent` must be a whitelisted intent, got \"{intent}\". " +
+                $"Valid intents: {string.Join(", ", IntentWhitelist.All)}");
 
-        // Hard enforcement of mission_guidance.forbidden_archetypes.
-        // The prompt asks the LLM to avoid these archetypes; the validator
-        // rejects if it slipped through. Saves us from prompt-attention
-        // drift on critical constraints (e.g. scenario C's pure-mining-
-        // friendly context where combat is forbidden but Marauders are
-        // listed as hostile in the factions dict).
-        if (combatForbidden && (type == "ClearPoi" || type == "KillEnemies"))
-            throw new LlmValidationException(
-                $"field `{path}.type` is a combat archetype but `combat` is in " +
-                $"mission_guidance.forbidden_archetypes");
-        if (escortForbidden && type == "ProtectUnit")
-            throw new LlmValidationException(
-                $"field `{path}.type` is ProtectUnit but `escort` is in " +
-                $"mission_guidance.forbidden_archetypes");
+        // Mechanical enforcement of forbidden_archetypes. An intent is
+        // blocked if ANY of its archetypes (composite intents carry
+        // multiple) appears in the forbidden list. This is the single
+        // backstop against prompt-attention drift on context-impossible
+        // intents (e.g. combat forbidden because no faction is hostile).
+        foreach (var arch in IntentWhitelist.Archetypes(intent))
+            if (forbidden.Contains(arch))
+                throw new LlmValidationException(
+                    $"field `{path}.intent=\"{intent}\"` requires archetype `{arch}` " +
+                    $"but it is in mission_guidance.forbidden_archetypes");
 
-        var parsed = type switch
+        return intent switch
         {
-            "KillEnemies"      => ParseKillEnemies(obj, path, atWar, reputation),
-            "ProtectUnit"      => ParseProtectUnit(obj, path),
-            "TriggerObjective" => ParseTriggerObjective(obj, path),
-            "CollectItemTypes" => ParseCollectItemTypes(obj, path, atWar, reputation),
-            "ClearPoi"         => ParseClearPoi(obj, path, atWar, reputation),
-            _                  => throw new LlmValidationException(
-                                      $"unreachable: whitelist passed but switch missed \"{type}\""),
+            IntentWhitelist.ClearCombatSite       => ParseClearCombatSite(obj, path, atWar, reputation),
+            IntentWhitelist.GatherOre             => ParseGatherOre(obj, path),
+            IntentWhitelist.GatherSalvage         => ParseGatherSalvage(obj, path),
+            IntentWhitelist.DefendedGatherOre     => ParseDefendedGatherOre(obj, path, atWar, reputation),
+            IntentWhitelist.DefendedGatherSalvage => ParseDefendedGatherSalvage(obj, path, atWar, reputation),
+            IntentWhitelist.DeliverToStation      => ParseDeliverToStation(obj, path, destinations),
+            IntentWhitelist.HaulGoods             => ParseHaulGoods(obj, path, destinations),
+            _ => throw new LlmValidationException(
+                     $"unreachable: whitelist passed but switch missed \"{intent}\""),
         };
-
-        // Follow-up: the CollectItemTypes.guards_faction path IS combat
-        // (spawns hostile units at the POI). Gate it here after the
-        // sub-parser returns so the error surfaces with the final typed
-        // object's detail.
-        if (combatForbidden && parsed is LlmCollectItemTypes c && c.GuardsFaction != null)
-            throw new LlmValidationException(
-                $"field `{path}.guards_faction` is set but `combat` is in " +
-                $"mission_guidance.forbidden_archetypes (guards spawn hostile units, " +
-                $"which is combat)");
-
-        return parsed;
     }
 
-    private LlmObjective ParseKillEnemies(
+    private LlmIntent ParseClearCombatSite(
         JObject obj, string path,
         IReadOnlyList<string> atWar,
         IReadOnlyDictionary<string, int> reputation)
     {
-        RequireStrictKeys(obj, path, "type", "enemy_faction", "required_amount", "description");
+        RequireStrictKeys(obj, path, "intent", "enemy_faction", "description");
+        var faction = ReadHostileFaction(obj, $"{path}.enemy_faction", atWar, reputation);
+        var desc    = ReadObjectiveDescription(obj, $"{path}.description");
+        return new ClearCombatSiteIntent(faction, desc);
+    }
 
-        var faction = obj["enemy_faction"]!.Value<string>() ?? string.Empty;
+    private LlmIntent ParseGatherOre(JObject obj, string path)
+    {
+        RequireStrictKeys(obj, path, "intent", "required_amount", "description");
+        var amount = ReadInt(obj, $"{path}.required_amount", GatherRequiredMin, GatherRequiredMax);
+        var desc   = ReadObjectiveDescription(obj, $"{path}.description");
+        return new GatherOreIntent(amount, desc);
+    }
+
+    private LlmIntent ParseGatherSalvage(JObject obj, string path)
+    {
+        RequireStrictKeys(obj, path, "intent", "required_amount", "description");
+        var amount = ReadInt(obj, $"{path}.required_amount", GatherRequiredMin, GatherRequiredMax);
+        var desc   = ReadObjectiveDescription(obj, $"{path}.description");
+        return new GatherSalvageIntent(amount, desc);
+    }
+
+    private LlmIntent ParseDefendedGatherOre(
+        JObject obj, string path,
+        IReadOnlyList<string> atWar,
+        IReadOnlyDictionary<string, int> reputation)
+    {
+        RequireStrictKeys(obj, path, "intent", "required_amount", "guards_faction", "description");
+        var amount  = ReadInt(obj, $"{path}.required_amount", GatherRequiredMin, GatherRequiredMax);
+        var guards  = ReadHostileFaction(obj, $"{path}.guards_faction", atWar, reputation);
+        var desc    = ReadObjectiveDescription(obj, $"{path}.description");
+        return new DefendedGatherOreIntent(amount, guards, desc);
+    }
+
+    private LlmIntent ParseDefendedGatherSalvage(
+        JObject obj, string path,
+        IReadOnlyList<string> atWar,
+        IReadOnlyDictionary<string, int> reputation)
+    {
+        RequireStrictKeys(obj, path, "intent", "required_amount", "guards_faction", "description");
+        var amount  = ReadInt(obj, $"{path}.required_amount", GatherRequiredMin, GatherRequiredMax);
+        var guards  = ReadHostileFaction(obj, $"{path}.guards_faction", atWar, reputation);
+        var desc    = ReadObjectiveDescription(obj, $"{path}.description");
+        return new DefendedGatherSalvageIntent(amount, guards, desc);
+    }
+
+    private LlmIntent ParseDeliverToStation(
+        JObject obj, string path,
+        IReadOnlyList<AccessibleDestination> destinations)
+    {
+        RequireStrictKeys(obj, path, "intent", "destination_id", "description");
+        var destId = ReadDestinationId(obj, $"{path}.destination_id", destinations);
+        var desc   = ReadObjectiveDescription(obj, $"{path}.description");
+        return new DeliverToStationIntent(destId, desc);
+    }
+
+    private LlmIntent ParseHaulGoods(
+        JObject obj, string path,
+        IReadOnlyList<AccessibleDestination> destinations)
+    {
+        RequireStrictKeys(obj, path, "intent", "required_amount", "destination_id", "description");
+        var amount = ReadInt(obj, $"{path}.required_amount", HaulRequiredMin, HaulRequiredMax);
+        var destId = ReadDestinationId(obj, $"{path}.destination_id", destinations);
+        var desc   = ReadObjectiveDescription(obj, $"{path}.description");
+        return new HaulGoodsIntent(amount, destId, desc);
+    }
+
+    private static string ReadHostileFaction(
+        JObject obj, string path,
+        IReadOnlyList<string> atWar,
+        IReadOnlyDictionary<string, int> reputation)
+    {
+        var tok = obj[PathTail(path)]!;
+        if (tok.Type != JTokenType.String)
+            throw new LlmValidationException($"field `{path}` must be a string");
+        var faction = tok.Value<string>() ?? string.Empty;
         if (!FactionWhitelist.Contains(faction))
             throw new LlmValidationException(
-                $"field `{path}.enemy_faction` must be a whitelisted faction, got \"{faction}\"");
+                $"field `{path}` must be a whitelisted faction, got \"{faction}\"");
 
-        // Vanilla FactionData.IsEnemy: hostile iff at_war OR rep < -500.
-        // Mirror that here — reject KillEnemies against anything not
-        // sufficiently hostile (friendly OR neutral). Unknown rep defaults
-        // to 0 (treated as neutral, not hostile).
+        // Mirror vanilla FactionData.IsEnemy: hostile iff at_war OR rep < -500.
         var isAtWar = atWar != null && atWar.Contains(faction);
         var rep     = 0;
         reputation?.TryGetValue(faction, out rep);
         if (!isAtWar && rep >= -500)
             throw new LlmValidationException(
-                $"field `{path}.enemy_faction` is not hostile to player " +
-                $"(rep={rep}, at_war=false); refusing kill mission");
-
-        var required = ReadInt(obj, $"{path}.required_amount", KillRequiredMin, KillRequiredMax);
-        var desc     = ReadObjectiveDescription(obj, $"{path}.description");
-        return new LlmKillEnemies(faction, required, desc);
+                $"field `{path}` is not hostile to player " +
+                $"(rep={rep}, at_war=false); refusing combat mission against a non-enemy");
+        return faction;
     }
 
-    private LlmObjective ParseProtectUnit(JObject obj, string path)
-    {
-        RequireStrictKeys(obj, path, "type", "protect_text");
-        var text = obj["protect_text"]!;
-        if (text.Type != JTokenType.String)
-            throw new LlmValidationException($"field `{path}.protect_text` must be a string");
-        var s = text.Value<string>() ?? string.Empty;
-        if (s.Trim().Length == 0)
-            throw new LlmValidationException($"field `{path}.protect_text` must be non-empty");
-        if (s.Length > ProtectTextMaxLen)
-            throw new LlmValidationException(
-                $"field `{path}.protect_text` exceeds max length {ProtectTextMaxLen}");
-        for (var i = 0; i < s.Length; i++)
-            if (s[i] >= 128)
-                throw new LlmValidationException(
-                    $"field `{path}.protect_text` has non-ascii char U+{(int)s[i]:X4}");
-        return new LlmProtectUnit(s);
-    }
-
-    private LlmObjective ParseTriggerObjective(JObject obj, string path)
-    {
-        RequireStrictKeys(obj, path, "type", "trigger", "required_amount", "description");
-        var trigTok = obj["trigger"]!;
-        if (trigTok.Type != JTokenType.String)
-            throw new LlmValidationException($"field `{path}.trigger` must be a string");
-        var trigger = trigTok.Value<string>() ?? string.Empty;
-        if (!TriggerWhitelist.Contains(trigger))
-            throw new LlmValidationException(
-                $"field `{path}.trigger` must be a whitelisted trigger, got \"{trigger}\"");
-        var required = ReadInt(obj, $"{path}.required_amount", TriggerRequiredMin, TriggerRequiredMax);
-        var desc     = ReadObjectiveDescription(obj, $"{path}.description");
-        return new LlmTriggerObjective(trigger, required, desc);
-    }
-
-    private LlmObjective ParseCollectItemTypes(
+    private static string ReadDestinationId(
         JObject obj, string path,
-        IReadOnlyList<string> atWar,
-        IReadOnlyDictionary<string, int> reputation)
+        IReadOnlyList<AccessibleDestination> destinations)
     {
-        RequireKeys(obj, path,
-            required: new[] { "type", "item_category", "required_amount", "description" },
-            optional: new[] { "guards_faction" });
-
-        var catTok = obj["item_category"]!;
-        if (catTok.Type != JTokenType.String)
-            throw new LlmValidationException($"field `{path}.item_category` must be a string");
-        var cat = catTok.Value<string>() ?? string.Empty;
-        if (!ItemCategoryWhitelist.Contains(cat))
+        var tok = obj[PathTail(path)]!;
+        if (tok.Type != JTokenType.String)
+            throw new LlmValidationException($"field `{path}` must be a string");
+        var id = tok.Value<string>() ?? string.Empty;
+        if (destinations.Count == 0)
             throw new LlmValidationException(
-                $"field `{path}.item_category` must be a whitelisted category, got \"{cat}\"");
-        var required = ReadInt(obj, $"{path}.required_amount", CollectRequiredMin, CollectRequiredMax);
-        var desc     = ReadObjectiveDescription(obj, $"{path}.description");
-
-        string? guardsFaction = null;
-        if (obj.ContainsKey("guards_faction"))
-        {
-            // Only Ore and Salvage spawn POIs the guards can attach to.
-            // RefinedProduct / TradeGoods are acquired via refineries /
-            // traders (no location to spawn on) — rejecting guards_faction
-            // here keeps the factory's POI path simple.
-            if (cat != "Ore" && cat != "Salvage")
-                throw new LlmValidationException(
-                    $"field `{path}.guards_faction` only valid when `item_category` is Ore or Salvage " +
-                    $"(no POI to spawn defenders at for \"{cat}\")");
-
-            var gfTok = obj["guards_faction"]!;
-            if (gfTok.Type != JTokenType.String)
-                throw new LlmValidationException($"field `{path}.guards_faction` must be a string");
-            var gf = gfTok.Value<string>() ?? string.Empty;
-            if (!FactionWhitelist.Contains(gf))
-                throw new LlmValidationException(
-                    $"field `{path}.guards_faction` must be a whitelisted faction, got \"{gf}\"");
-
-            // Same hostility rule as KillEnemies / ClearPoi — guards must
-            // be hostile to the player (at war OR rep < -500). Pointing
-            // the LLM at a friendly guild's "defenders" would mean
-            // attacking allies at your own gather site.
-            var isAtWar = atWar != null && atWar.Contains(gf);
-            var rep     = 0;
-            reputation?.TryGetValue(gf, out rep);
-            if (!isAtWar && rep >= -500)
-                throw new LlmValidationException(
-                    $"field `{path}.guards_faction` is not hostile to player " +
-                    $"(rep={rep}, at_war=false); refusing defended-gather mission");
-
-            guardsFaction = gf;
-        }
-
-        return new LlmCollectItemTypes(cat, required, desc, guardsFaction);
-    }
-
-    private LlmObjective ParseClearPoi(
-        JObject obj, string path,
-        IReadOnlyList<string> atWar,
-        IReadOnlyDictionary<string, int> reputation)
-    {
-        RequireStrictKeys(obj, path, "type", "enemy_faction", "description");
-
-        var faction = obj["enemy_faction"]!.Value<string>() ?? string.Empty;
-        if (!FactionWhitelist.Contains(faction))
+                $"field `{path}` was provided but context.accessible_destinations is empty; " +
+                $"deliver/haul intents require at least one reachable station");
+        if (!destinations.Any(d => d.ShortId == id))
             throw new LlmValidationException(
-                $"field `{path}.enemy_faction` must be a whitelisted faction, got \"{faction}\"");
-
-        // Same hostility rule as KillEnemies — vanilla FactionData.IsEnemy:
-        // hostile iff at_war OR rep < -500.
-        var isAtWar = atWar != null && atWar.Contains(faction);
-        var rep     = 0;
-        reputation?.TryGetValue(faction, out rep);
-        if (!isAtWar && rep >= -500)
-            throw new LlmValidationException(
-                $"field `{path}.enemy_faction` is not hostile to player " +
-                $"(rep={rep}, at_war=false); refusing clear-POI mission");
-
-        var desc = ReadObjectiveDescription(obj, $"{path}.description");
-        return new LlmClearPoi(faction, desc);
+                $"field `{path}` = \"{id}\" is not in context.accessible_destinations " +
+                $"(valid ids: {string.Join(", ", destinations.Select(d => d.ShortId))})");
+        return id;
     }
 
     private IReadOnlyList<LlmReward> ReadRewards(JObject obj)
@@ -578,32 +454,5 @@ internal sealed class MissionBlockValidator
         foreach (var key in allowed)
             if (!obj.ContainsKey(key))
                 throw new LlmValidationException($"missing field `{path}.{key}`");
-    }
-
-    /// <summary>Variant of <see cref="RequireStrictKeys"/> for objects with
-    /// a mix of required and optional fields. Required keys must be present;
-    /// optional keys may be present. Any other key is rejected.</summary>
-    private static void RequireKeys(
-        JObject obj, string path, string[] required, string[] optional)
-    {
-        var allowed = new HashSet<string>(required);
-        foreach (var opt in optional)
-            allowed.Add(opt);
-        foreach (var prop in obj.Properties())
-            if (!allowed.Contains(prop.Name))
-                throw new LlmValidationException(
-                    $"unexpected field `{path}.{prop.Name}`");
-        foreach (var key in required)
-            if (!obj.ContainsKey(key))
-                throw new LlmValidationException($"missing field `{path}.{key}`");
-    }
-
-    private static bool AnyNonProtectObjective(IReadOnlyList<LlmMissionStep> steps)
-    {
-        foreach (var step in steps)
-            foreach (var obj in step.Objectives)
-                if (obj is not LlmProtectUnit)
-                    return true;
-        return false;
     }
 }
