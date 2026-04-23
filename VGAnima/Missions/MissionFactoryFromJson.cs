@@ -208,11 +208,33 @@ internal static class MissionFactoryFromJson
         var enemyFaction = Faction.Get(intent.EnemyFaction);
         var combat       = brokerStation.system.AddCombat(enemyFaction);
 
-        // Scale guard payload with mission level so clearing the zone
-        // plays like a real engagement. Clamp so high-level stations
-        // don't become a war. L1→2.2 L5→3.0 L10→4.0 L15+→5.0.
-        var payloadMultiplier = Math.Clamp(2f + missionLevel * 0.2f, 2f, 5f);
-        combat.AddGuards(combat.CreateUnitPayload(payloadMultiplier, GameplayType.Combat));
+        // Two knobs on CreateUnitPayload:
+        //   pointsScale — size/strength budget per spawn (multiplies the
+        //     POI's pointsValue). Lowering keeps individual ships matched
+        //     to the station level rather than oversized.
+        //   minUnits / maxUnits — the RANDOM unit count range. Default
+        //     is 1..5, which can roll to 1 — a live run hit this and the
+        //     site spawned a single ship ("a joke, free reward"). We
+        //     pin the floor so "clear the zone" always means engaging a
+        //     multi-ship presence.
+        var payloadMultiplier = Math.Clamp(1.5f + missionLevel * 0.1f, 1.5f, 3f);
+        combat.AddGuards(combat.CreateUnitPayload(
+            pointsScale: payloadMultiplier,
+            gType:       GameplayType.Combat,
+            minUnits:    3,
+            maxUnits:    5));
+
+        // Reinforcement wave 25s after player enters — matches vanilla's
+        // HelpCombat / BountyHunt pattern (second wave of the same
+        // archetype, smaller scale).
+        combat.AddTriggeredSpawn(
+            combat.CreateUnitPayload(
+                pointsScale: 1f,
+                gType:       GameplayType.Combat,
+                minUnits:    2,
+                maxUnits:    3),
+            spawnDelay: 25f);
+
         step.dynamicPointOfInterest = combat;
 
         step.objectives.Add(new KillEnemies
@@ -255,10 +277,18 @@ internal static class MissionFactoryFromJson
 
         if (guardsFaction != null)
         {
-            // Same payload scaling as BuildClearCombatSite so defended
-            // sites match the narrative weight of dedicated combat sites.
-            var payloadMultiplier = Math.Clamp(2f + missionLevel * 0.2f, 2f, 5f);
-            poi.AddGuards(poi.CreateUnitPayload(payloadMultiplier, GameplayType.Combat, guardsFaction));
+            // Same pointsScale curve as BuildClearCombatSite (matches
+            // each unit's strength to the station level), but with a
+            // lower minUnits — a defended gather site is a "fight
+            // your way in to work" shape, not a standalone combat zone,
+            // so 2-4 guards read as "defenders" rather than a fleet.
+            var payloadMultiplier = Math.Clamp(1.5f + missionLevel * 0.1f, 1.5f, 3f);
+            poi.AddGuards(poi.CreateUnitPayload(
+                pointsScale: payloadMultiplier,
+                gType:       GameplayType.Combat,
+                f:           guardsFaction,
+                minUnits:    2,
+                maxUnits:    4));
             poi.dangerLevel = "@MapPOIDangerPirates";
         }
 

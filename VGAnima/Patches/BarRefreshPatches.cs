@@ -634,6 +634,16 @@ internal static class BarRefreshPatches
                 return;
             }
 
+            // Override the vanilla-seeded `description` label (Prospector /
+            // Salvage Scout / Equipment Rep / Slick Entrepreneur) with one
+            // matching the actual mission shape. The base Salesman seed
+            // rolls a random label at Initialize() time, which can mismatch
+            // the LLM-authored mission (e.g. "Prospector" pitching a
+            // defended-salvage job). VGAnima brokers are contract
+            // freelancers — re-label to reflect that, with a per-intent
+            // flavor tag so the UI hint matches what's on offer.
+            newPatron.description = DescriptionForIntent(story.Mission.Steps[0].Intent);
+
             // Build dialogueLines from the pitch block so VGTTS's BarPatron.Initialize
             // postfix has text to warm.
             var dialogueLines = new List<DialogueLine>(story.Pitch.Count);
@@ -904,6 +914,24 @@ internal static class BarRefreshPatches
             "      words; at the end when it reacts to them. Do not embed\n" +
             "      mid-sentence.\n";
     }
+
+    /// <summary>Salesman label (shown under the broker's name in the bar
+    /// UI) chosen to match the mission intent's narrative shape. Replaces
+    /// the random vanilla-seed label (Prospector / Salvage Scout /
+    /// Equipment Rep / Slick Entrepreneur) when the LLM authored a
+    /// mismatched intent — e.g. a "Prospector"-labeled broker offering a
+    /// clear-the-zone combat contract breaks immersion.</summary>
+    private static string DescriptionForIntent(LlmIntent intent) => intent switch
+    {
+        ClearCombatSiteIntent       => "Fixer",
+        DefendedGatherOreIntent     => "Mining Fixer",
+        DefendedGatherSalvageIntent => "Salvage Fixer",
+        GatherOreIntent             => "Mining Broker",
+        GatherSalvageIntent         => "Salvage Broker",
+        HaulGoodsIntent             => "Freight Broker",
+        DeliverToStationIntent      => "Courier Broker",
+        _                           => "Contract Broker",
+    };
 
     private static string BuildUserPrompt(string contextJson, BrokerInfo brokerInfo, SpaceStation station)
     {
