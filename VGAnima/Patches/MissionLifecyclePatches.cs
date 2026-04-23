@@ -150,8 +150,9 @@ internal static class MissionLifecyclePatches
 
     /// <summary>Postfix on <see cref="GamePlayer.ArchiveMission(string, bool)"/>
     /// — takes the storyId directly, so no <c>Mission</c> indirection
-    /// needed. Fires for both the "mission resolution complete, archive"
-    /// path and any explicit archive calls.</summary>
+    /// needed. Fires for the "mission resolution complete, archive" path
+    /// and any explicit archive calls, but NOT for player-initiated
+    /// abandon (that routes through <see cref="OnAbandonPatch"/>).</summary>
     [HarmonyPatch(typeof(GamePlayer), nameof(GamePlayer.ArchiveMission))]
     internal static class OnArchivePatch
     {
@@ -160,12 +161,45 @@ internal static class MissionLifecyclePatches
         {
             Plugin.Log.LogDebug($"OnArchivePatch fired (storyId={id ?? "<null>"})");
             if (!IsAuthored(id)) return;
-            // If OnComplete or OnFail already recorded + removed this entry,
-            // RecordAndRemove is a no-op. Archive is the catch-all for
-            // "abandoned" — only reaches RecordCompletion when no prior
-            // terminal event fired.
-            RecordAndRemove(id!, CompletedMissionOutcomes.Abandoned, missionLevel: 0);
+            // If OnComplete already recorded + removed this entry,
+            // RecordAndRemove is a no-op.
+            RecordAndRemove(id!, CompletedMissionOutcomes.Completed, missionLevel: 0);
             Plugin.Log.LogDebug($"OnArchivePatch: recorded + removed storyId={id}");
         }
+    }
+
+    /// <summary>Postfix on <see cref="GamePlayer.RemoveMission(Mission, bool)"/>
+    /// — vanilla's single funnel for mission removal. The <c>completed</c>
+    /// flag distinguishes the two terminal paths:
+    /// <list type="bullet">
+    ///   <item><c>completed=true</c> → vanilla calls
+    ///     <see cref="GamePlayer.ArchiveMission"/>, which
+    ///     <see cref="OnArchivePatch"/> handles.</item>
+    ///   <item><c>completed=false</c> → vanilla calls
+    ///     <see cref="Mission.OnMissionAbandoned"/> and DOES NOT archive.
+    ///     That's our abandon path — record as
+    ///     <see cref="CompletedMissionOutcomes.Abandoned"/> here.</item>
+    /// </list>
+    /// Hooking the caller rather than <c>OnMissionAbandoned</c> itself
+    /// sidesteps the "subclass didn't call base" failure mode; every
+    /// abandon across every subclass flows through
+    /// <c>RemoveMission</c>, so one patch covers them all.</summary>
+    [HarmonyPatch(typeof(GamePlayer), nameof(GamePlayer.RemoveMission),
+        new[] { typeof(Mission), typeof(bool) })]
+    internal static class OnAbandonPatch
+    {
+        [HarmonyPostfix]
+#pragma warning disable Harmony003
+        private static void Postfix(Mission mission, bool completed)
+        {
+            var id = mission?.storyId;
+            Plugin.Log.LogDebug(
+                $"OnAbandonPatch fired (storyId={id ?? "<null>"}, completed={completed})");
+            if (completed) return;               // OnArchivePatch handles the completed branch
+            if (!IsAuthored(id)) return;
+            RecordAndRemove(id!, CompletedMissionOutcomes.Abandoned, mission?.level ?? 0);
+            Plugin.Log.LogDebug($"OnAbandonPatch: recorded + removed storyId={id}");
+        }
+#pragma warning restore Harmony003
     }
 }

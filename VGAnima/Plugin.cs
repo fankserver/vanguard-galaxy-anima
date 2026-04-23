@@ -132,6 +132,7 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(MissionLifecyclePatches.OnCompletePatch));
         _harmony.PatchAll(typeof(MissionLifecyclePatches.OnFailPatch));
         _harmony.PatchAll(typeof(MissionLifecyclePatches.OnArchivePatch));
+        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnAbandonPatch));
         _harmony.PatchAll(typeof(SystemEntryPatch));
 
         // Wire persistence singletons into Harmony patches (all four use the
