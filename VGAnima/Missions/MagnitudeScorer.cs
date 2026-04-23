@@ -7,7 +7,8 @@ namespace VGAnima.Missions;
 /// <summary>Scores a completed mission's "notability" on a 1-10 scale.
 /// Higher-magnitude events propagate further in the journal context
 /// windows — a Scaplord-tier warzone bust shows up in distant brokers'
-/// <c>notable</c> window; a small ore-gather doesn't leave the station.
+/// <c>rumors</c> window (via the reach formula); a small ore-gather
+/// barely scrapes past its neighbors.
 ///
 /// <para>v1 formula is deliberately coarse:
 /// <c>base = missionLevel / 2</c> (1..~20 → 1..~10),
@@ -34,9 +35,9 @@ internal static class MagnitudeScorer
         if (archetype == MissionArchetypes.Combat) score += 1;
         if (archetype == MissionArchetypes.DefendedCollect) score += 2;
 
-        // Outcome modifiers — abandoned/failed missions are less
-        // "notable" because they don't generate the success chatter
-        // that drives word-of-mouth propagation.
+        // Outcome modifiers — abandoned/failed missions propagate
+        // less because they don't generate the success chatter that
+        // drives word-of-mouth.
         if (outcome == CompletedMissionOutcomes.Abandoned) score -= 2;
         if (outcome == CompletedMissionOutcomes.Failed)    score -= 1;
 

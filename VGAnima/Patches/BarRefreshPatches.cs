@@ -922,12 +922,34 @@ internal static class BarRefreshPatches
             "  vanilla salesmen at the same bar. Reference them organically (\"see that\n" +
             "  Prospector? Their claim's a dud; mine's real\") or contrast. Don't just\n" +
             "  echo their offer shape.\n" +
-            "- JOURNAL — context.journal (if present) has four windows: local / factional\n" +
-            "  / notable / active. Non-duplication is load-bearing: DO NOT reuse an\n" +
-            "  entry's mission_name, description, or completion_text. DO NOT offer a new\n" +
-            "  mission that duplicates an `active` entry on intent + faction + site. You\n" +
-            "  MAY reference journal entries in dialogue (\"you've been hunting Corsairs\n" +
-            "  out here lately\").\n" +
+            "- JOURNAL — context.journal (if present) has four windows:\n" +
+            "    * local   = events at THIS station. Bar-gossip fidelity — you were\n" +
+            "                there when it happened. JumpsFromHere = 0.\n" +
+            "    * network = same-faction events within reach via internal channels.\n" +
+            "                Reliable, but the broker wasn't personally there. Each\n" +
+            "                entry's jumps_from_here tells the narrative distance.\n" +
+            "    * rumors  = distant hearsay that made it here despite being\n" +
+            "                out-of-network (different faction or far away).\n" +
+            "                Acknowledge the distance — \"way out in X\" / \"I heard\n" +
+            "                from a Corsair deal three jumps over.\"\n" +
+            "    * active  = IN-FLIGHT offered/accepted missions the broker plausibly\n" +
+            "                knows about.\n" +
+            "  Non-duplication is load-bearing: DO NOT reuse an entry's mission_name,\n" +
+            "  description, or completion_text. DO NOT offer a new mission that\n" +
+            "  duplicates an `active` entry on intent + faction + site. You MAY\n" +
+            "  reference journal entries in dialogue, matched to the window's\n" +
+            "  fidelity (local = direct, network = faction-channel, rumors = hearsay).\n" +
+            "- REGIONAL RECOGNITION — context.regionally_known (if present) lists\n" +
+            "  systems where the player has been a regular. If this station's system\n" +
+            "  appears in the list, the broker MAY casually acknowledge recognizing\n" +
+            "  the player. Two framings:\n" +
+            "    * recent_activity filled (e.g. \"salvage\") -> reference the pattern:\n" +
+            "      \"you've been salvaging around here, yeah?\"\n" +
+            "    * recent_activity null -> face-only: \"I've seen you through here\n" +
+            "      a few times.\"\n" +
+            "  DO NOT invent specific prior events from this field — the journal is\n" +
+            "  the source of truth for specific deeds. Regional recognition is about\n" +
+            "  the player being a familiar face, nothing more.\n" +
             "- ATMOSPHERIC MIRRORING — context.location.station_condition shifts register:\n" +
             "    * war-torn -> clipped, urgent, military cadence.\n" +
             "    * peaceful -> relaxed, collegial.\n" +

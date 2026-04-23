@@ -52,8 +52,10 @@ internal sealed class AnimaConfig
             "Feed the broker a filtered view of past broker-mission outcomes so " +
             "they can reference player history organically (\"you've been hunting " +
             "Corsairs here lately\", \"the Steel Vultures appreciate your work\"). " +
-            "Three windows per broker — local (same station), factional (same " +
-            "faction elsewhere), and notable (high-magnitude events galaxy-wide). " +
+            "Four windows per broker — local (same station), network (same " +
+            "faction within reach), rumors (distant hearsay), and active " +
+            "(in-flight offered missions). Reach is distance-attenuated by " +
+            "magnitude, age, and player fame. " +
             "Set to false to fall back to stateless brokers.");
 
         StageDirectionLevel = cf.Bind("Style", "StageDirectionLevel", 0,
