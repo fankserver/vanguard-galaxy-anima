@@ -399,25 +399,26 @@ internal static class BarRefreshPatches
             if (plugin.Cfg.IncludePlayerJournal.Value && plugin.PersistedRegistry != null)
             {
                 // Reach-formula inputs: broker's current system guid
-                // (falls back to station-name-derived empty → unreachable
-                // safely when missing), current game-seconds for age
-                // penalty, max-rank for fame bonus.
+                // (empty → bridge query returns empty, safe degrade),
+                // current game-seconds for age penalty, max-rank for
+                // fame bonus. Jump distance is a system→system closure
+                // over vanilla's jumpgate graph.
                 var brokerSystemGuid = station?.system?.guid ?? string.Empty;
-                var jumpsToBroker    = VGAnima.Galaxy.VanillaSystemGraph
-                                        .JumpsToBrokerFrom(brokerSystemGuid);
+                var jumpDistance     = VGAnima.Galaxy.VanillaSystemGraph.SystemJumpDistance;
                 var fame = System.Math.Max(
                     plugin.GameStateView.BountyRank,
                     System.Math.Max(plugin.GameStateView.PatrolRank,
                                     plugin.GameStateView.IndustryRank));
 
                 journal = JournalContextBuilder.Build(
-                    plugin.PersistedRegistry.CompletedMissions,
-                    stationId:                 station!.guid,
-                    factionIdentifier:         brokerInfo.StationFaction,
-                    jumpsFromStationToBroker:  jumpsToBroker,
-                    currentGameSeconds:        plugin.Clock.GameSeconds,
-                    playerFame:                fame,
-                    inFlight:                  plugin.PersistedRegistry.All());
+                    bridge:             plugin.MissionJournalBridge,
+                    brokerStationId:    station!.guid,
+                    brokerSystemId:     brokerSystemGuid,
+                    factionIdentifier:  brokerInfo.StationFaction,
+                    jumpDistance:       jumpDistance,
+                    currentGameSeconds: plugin.Clock.GameSeconds,
+                    playerFame:         fame,
+                    inFlight:           plugin.PersistedRegistry.All());
             }
             // Regional recognition: systems where the player is a
             // regular. Composed independently of journal — survives the

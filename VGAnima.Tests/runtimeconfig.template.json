@@ -1,0 +1,6 @@
+{
+  "configProperties": {
+    "System.Reflection.Metadata.MetadataUpdater.IsSupported": false
+  },
+  "rollForward": "LatestMajor"
+}

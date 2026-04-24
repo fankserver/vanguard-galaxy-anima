@@ -53,22 +53,17 @@ internal static class VanillaSystemGraph
         return poi?.system?.guid;
     }
 
-    /// <summary>Pre-bound closure for
-    /// <c>JournalContextBuilder.Build(jumpsFromStationToBroker:)</c>.
-    /// Given the broker's current system guid, returns a function that
-    /// computes "jumps from ANY station's system to the broker's."
-    /// <c>int.MaxValue</c> for stations whose system is gone or
-    /// disconnected.</summary>
-    public static System.Func<string, int> JumpsToBrokerFrom(string brokerSystemGuid) =>
-        stationGuid =>
-        {
-            var fromSystemGuid = StationSystemGuid(stationGuid);
-            if (string.IsNullOrEmpty(fromSystemGuid)) return int.MaxValue;
-            var jumps = GalaxyDistance.JumpsBetween(
-                fromSystemGuid!, brokerSystemGuid, GetAdjacent);
-            // GalaxyDistance returns -1 for disconnected / unknown →
-            // map to MaxValue so the reach formula uniformly treats
-            // "out of reach" as infinite distance.
-            return jumps < 0 ? int.MaxValue : jumps;
-        };
+    /// <summary>System→system jump distance closure. Shape matches
+    /// <c>IMissionJournalQuery.GetMissionsWithinJumps</c> and
+    /// <c>JournalContextBuilder.Build(jumpDistance:)</c>. Returns
+    /// <c>int.MaxValue</c> for disconnected / unknown systems so reach
+    /// checks uniformly treat "out of reach" as infinite distance.</summary>
+    public static int SystemJumpDistance(string fromSystemGuid, string toSystemGuid)
+    {
+        if (string.IsNullOrEmpty(fromSystemGuid) || string.IsNullOrEmpty(toSystemGuid))
+            return int.MaxValue;
+        var jumps = GalaxyDistance.JumpsBetween(
+            fromSystemGuid, toSystemGuid, GetAdjacent);
+        return jumps < 0 ? int.MaxValue : jumps;
+    }
 }

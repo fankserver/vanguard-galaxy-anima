@@ -50,6 +50,13 @@ public class Plugin : BaseUnityPlugin
     internal PersistedBrokerRegistry PersistedRegistry { get; private set; } = null!;
     internal SidecarIO SidecarIO { get; private set; } = null!;
     internal IClock Clock { get; private set; } = null!;
+    /// <summary>Typed soft-dep on VGMissionJournal. Source of truth for
+    /// resolved-mission history in the journal's local/network/rumors
+    /// windows. When the plugin isn't installed, the bridge's
+    /// <see cref="MissionJournal.VgMissionJournalBridge.IsAvailable"/>
+    /// is false and every query returns empty — journal still builds,
+    /// just with empty resolved windows.</summary>
+    internal MissionJournal.VgMissionJournalBridge MissionJournalBridge { get; private set; } = null!;
 
     private Harmony _harmony = null!;
 
@@ -71,6 +78,8 @@ public class Plugin : BaseUnityPlugin
         PersistedRegistry = new PersistedBrokerRegistry();
         Clock             = new GameClock();
         SidecarIO         = new SidecarIO(() => DateTime.UtcNow);
+        MissionJournalBridge = new MissionJournal.VgMissionJournalBridge();
+        Log.LogInfo($"VGMissionJournal detected: {(MissionJournalBridge.IsAvailable ? "yes" : "no")}");
 
         MissionAssigner = new LlmMissionAssigner(
             register: Source.MissionSystem.StoryMission.Add,

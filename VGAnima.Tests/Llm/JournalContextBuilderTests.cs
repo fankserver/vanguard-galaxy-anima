@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using VGAnima.Llm;
+using VGAnima.MissionJournal;
 using VGAnima.Persistence;
+using VGMissionJournal.Api;
+using VGMissionJournal.Logging;
 using Xunit;
 
 namespace VGAnima.Tests.Llm;
@@ -11,35 +14,114 @@ public class JournalContextBuilderTests
 {
     private const double OneDay = 86400.0;
 
-    private static CompletedMissionRecord Rec(
-        string storyId, string stationId, string faction,
-        int magnitude, string missionName = "Test Mission",
-        string archetype = MissionArchetypes.Combat,
-        string outcome   = CompletedMissionOutcomes.Completed,
-        double resolvedGameSeconds = 1000.0) =>
-        new(storyId, "A Broker", stationId, "A Station", faction,
-            missionName, archetype, outcome,
-            MissionLevel: 10, SystemName: "A System",
-            MagnitudeScore: magnitude,
-            ResolvedGameSeconds: resolvedGameSeconds,
-            ResolvedRealUtc:     "2026-04-22T00:00:00Z");
+    private const string BrokerStation = "station-A";
+    private const string BrokerSystem  = "system-A";
 
-    // Default graph closure: "always adjacent" (1 jump). Lands in the
-    // base-0 distance band, so any magnitude ≥ 0 reaches.
-    private static Func<string, int> AlwaysAdjacent() => _ => 1;
+    // ---- Fake bridge source ----
 
-    // "Far but reachable" (8 jumps). Base requirement becomes 4.
-    private static Func<string, int> AlwaysFar() => _ => 8;
+    /// <summary>Fake IMissionJournalQuery. Only the methods
+    /// JournalContextBuilder actually calls are implemented — the rest
+    /// throw (compile-time safety: if the builder starts calling
+    /// something new, tests blow up immediately).</summary>
+    private sealed class FakeQuery : IMissionJournalQuery
+    {
+        private readonly List<MissionRecord> _records;
+        public FakeQuery(IEnumerable<MissionRecord> records) { _records = records.ToList(); }
 
-    // "Unreachable" (returns MaxValue). Every record fails the reach
-    // check — tests exclude-when-unreachable paths.
-    private static Func<string, int> AlwaysUnreachable() => _ => int.MaxValue;
+        public IReadOnlyList<MissionRecord> GetMissionsWithinJumps(
+            string pivotSystemId, int maxJumps,
+            Func<string, string, int> jumpDistance,
+            double sinceGameSeconds = 0.0,
+            double untilGameSeconds = double.MaxValue)
+        {
+            return _records.Where(r =>
+            {
+                if (string.IsNullOrEmpty(r.SourceSystemId)) return false;
+                var terminal = r.TerminalAtGameSeconds ?? r.AcceptedAtGameSeconds;
+                if (terminal < sinceGameSeconds || terminal > untilGameSeconds) return false;
+                var d = jumpDistance(r.SourceSystemId!, pivotSystemId);
+                return d >= 0 && d <= maxJumps;
+            }).ToList();
+        }
+
+        public int SchemaVersion => 1;
+        public int TotalMissionCount => _records.Count;
+        public double? OldestAcceptedGameSeconds => null;
+        public double? NewestAcceptedGameSeconds => null;
+        public MissionRecord? GetMission(string id) => null;
+        public IReadOnlyList<MissionRecord> GetActiveMissions() => Array.Empty<MissionRecord>();
+        public IReadOnlyList<MissionRecord> GetAllMissions() => _records;
+        public IReadOnlyList<MissionRecord> GetMissionsInSystem(string s, double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyList<MissionRecord> GetMissionsByFaction(string s, double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyList<MissionRecord> GetMissionsByMissionSubclass(string s, double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyList<MissionRecord> GetMissionsByOutcome(Outcome o, double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyList<MissionRecord> GetMissionsWithObjective(string s, double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyList<MissionRecord> GetMissionsForStoryId(string s) => throw new NotImplementedException();
+        public IReadOnlyList<MissionRecord> GetRecentMissions(int n) => throw new NotImplementedException();
+        public IReadOnlyDictionary<string, int> CountByMissionSubclass(double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyDictionary<Outcome, int> CountByOutcome(double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyDictionary<string, int> CountBySystem(double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyDictionary<string, int> CountByFaction(double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+        public IReadOnlyList<SystemActivity> MostActiveSystemsInRange(string s, Func<string, string, int> f, int m, int n, double a = 0, double b = double.MaxValue) => throw new NotImplementedException();
+    }
+
+    /// <summary>Builds a resolved MissionRecord fixture. Terminal state
+    /// + timeline wired up so <see cref="MissionRecord.Outcome"/> returns
+    /// a real value (MagnitudeDerivation checks Outcome for decay).</summary>
+    private static MissionRecord Rec(
+        string storyIdOrInstance,
+        string sourceStationId,
+        string sourceSystemId,
+        string sourceFaction,
+        int    missionLevel = 10,
+        string subclass     = "Mission",
+        TimelineState terminal = TimelineState.Completed,
+        double acceptedAtGameSeconds = 100.0,
+        double terminalAtGameSeconds = 200.0)
+    {
+        var timeline = new List<TimelineEntry>
+        {
+            new(TimelineState.Accepted, acceptedAtGameSeconds, "2026-04-22T00:00:00Z"),
+            new(terminal, terminalAtGameSeconds, "2026-04-22T00:01:00Z"),
+        };
+
+        return new MissionRecord(
+            StoryId: storyIdOrInstance,
+            MissionInstanceId: storyIdOrInstance,
+            MissionName: "Test Mission",
+            MissionSubclass: subclass,
+            MissionLevel: missionLevel,
+            SourceStationId: sourceStationId,
+            SourceStationName: sourceStationId + "-name",
+            SourceSystemId: sourceSystemId,
+            SourceSystemName: sourceSystemId + "-name",
+            SourceSectorId: null, SourceSectorName: null,
+            SourceFaction: sourceFaction,
+            TargetStationId: null, TargetStationName: null, TargetSystemId: null,
+            PlayerLevel: 0,
+            PlayerShipName: null, PlayerShipLevel: null, PlayerCurrentSystemId: null,
+            Steps: new List<MissionStepDefinition>(),
+            Rewards: new List<MissionRewardSnapshot>(),
+            Timeline: timeline);
+    }
+
+    private static VgMissionJournalBridge BridgeWith(params MissionRecord[] records) =>
+        new VgMissionJournalBridge(new FakeQuery(records));
+
+    // Default jump closure: "always adjacent" (1 jump).
+    private static Func<string, string, int> AlwaysAdjacent() => (_, _) => 1;
+
+    // "Far but reachable" — 12 jumps (band 4, base=6).
+    private static Func<string, string, int> AlwaysFar(int jumps = 12) => (_, _) => jumps;
+
+    // ---- Empty / absent bridge ----
 
     [Fact]
-    public void Build_EmptyLog_ReturnsEmptyWindows()
+    public void Build_NoRecords_ReturnsEmptyWindows()
     {
         var section = JournalContextBuilder.Build(
-            new List<CompletedMissionRecord>(), "station-1", "SalvageGuild",
+            BridgeWith(),
+            BrokerStation, BrokerSystem, "SalvageGuild",
             AlwaysAdjacent());
         Assert.Empty(section.Local);
         Assert.Empty(section.Network);
@@ -47,37 +129,49 @@ public class JournalContextBuilderTests
     }
 
     [Fact]
-    public void Build_LocalWindow_FiltersBySameStationId()
+    public void Build_EmptyBrokerSystem_SkipsBridgeQuery_ReturnsEmpty()
     {
-        var log = new[]
-        {
-            Rec("s1", "station-A", "SalvageGuild", 3),
-            Rec("s2", "station-B", "SalvageGuild", 3),
-            Rec("s3", "station-A", "MiningGuild",  3),
-            Rec("s4", "station-C", "SalvageGuild", 3),
-        };
+        // Empty system guid = broker location unknown → reach math would
+        // be meaningless. Builder should short-circuit to empty resolved
+        // windows rather than let the bridge throw.
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+            BridgeWith(Rec("s1", BrokerStation, BrokerSystem, "SalvageGuild", missionLevel: 10)),
+            BrokerStation, brokerSystemId: "", factionIdentifier: "SalvageGuild",
+            AlwaysAdjacent());
+        Assert.Empty(section.Local);
+        Assert.Empty(section.Network);
+        Assert.Empty(section.Rumors);
+    }
+
+    // ---- Local window ----
+
+    [Fact]
+    public void Build_LocalWindow_FiltersByBrokerStationId()
+    {
+        var section = JournalContextBuilder.Build(
+            BridgeWith(
+                Rec("s1", BrokerStation, BrokerSystem,    "SalvageGuild"),
+                Rec("s2", "station-B",   "system-B",      "SalvageGuild"),
+                Rec("s3", BrokerStation, BrokerSystem,    "MiningGuild"),
+                Rec("s4", "station-C",   "system-C",      "SalvageGuild")),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
         Assert.Equal(2, section.Local.Count);
         Assert.All(section.Local, e => Assert.Contains(e.StoryId, new[] { "s1", "s3" }));
-        // Local entries always get JumpsFromHere = 0 — we were there.
         Assert.All(section.Local, e => Assert.Equal(0, e.JumpsFromHere));
     }
+
+    // ---- Network window ----
 
     [Fact]
     public void Build_NetworkWindow_SameFactionWithinReach_PopulatesJumpsFromHere()
     {
-        // Same-faction neighbor: base-0 distance band → every mag reaches.
-        // JumpsFromHere reflects the distance the adapter reported.
-        var log = new[]
-        {
-            Rec("s1", "station-A", "SalvageGuild", 3),   // local, excluded from network
-            Rec("s2", "station-B", "SalvageGuild", 1),   // network (mag-1 still reaches at 1 jump)
-            Rec("s3", "station-C", "SalvageGuild", 3),   // network
-            Rec("s4", "station-D", "MiningGuild",  3),   // different faction → rumors, not network
-        };
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+            BridgeWith(
+                Rec("s1", BrokerStation, BrokerSystem, "SalvageGuild"),     // local
+                Rec("s2", "station-B",   "system-B",   "SalvageGuild"),     // network
+                Rec("s3", "station-C",   "system-C",   "SalvageGuild"),     // network
+                Rec("s4", "station-D",   "system-D",   "MiningGuild")),     // rumors
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
         Assert.Equal(2, section.Network.Count);
         Assert.All(section.Network,
             e => Assert.Contains(e.StoryId, new[] { "s2", "s3" }));
@@ -87,16 +181,13 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_GossipAlwaysTravelsToNeighbors_EvenAtMagnitudeOne()
     {
-        // Product decision locked in 2026-04-23: "in reallife gossip
-        // travels always faster" — mag-1 events must reach 1-2 jumps
-        // out unconditionally (base-0 distance band).
-        var log = new[]
-        {
-            Rec("trivial", "station-B", "SalvageGuild", magnitude: 1,
-                outcome: CompletedMissionOutcomes.Abandoned),
-        };
+        // Product decision 2026-04-23: "gossip always travels" — base-0
+        // distance band accepts any magnitude. Level 2 abandoned = mag
+        // clamped to 1 (2/2 - 2 = -1 → clamp 1).
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+            BridgeWith(Rec("trivial", "station-B", "system-B", "SalvageGuild",
+                missionLevel: 2, terminal: TimelineState.Abandoned)),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
         Assert.Single(section.Network);
         Assert.Equal("trivial", section.Network[0].StoryId);
     }
@@ -104,153 +195,159 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_FarEvent_LowMagnitude_DoesNotReach()
     {
-        // 12 jumps (band-4 base = 6), same-faction bonus (-1) → required 5.
-        // Mag-3 fails (stays out); mag-6 passes (lands in Network).
-        var log = new[]
-        {
-            Rec("far-trivial", "station-far", "SalvageGuild", magnitude: 3),
-            Rec("far-notable", "station-far", "SalvageGuild", magnitude: 6),
-        };
+        // 12 jumps = band 4 base=6, same-faction bonus -1 → required 5.
+        // Level 4 = mag 2 (no combat, no multi-step) → OUT.
+        // Level 12 BountyMission = 6 + 1 combat = 7 → IN.
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", _ => 12, currentGameSeconds: 0);
+            BridgeWith(
+                Rec("far-trivial", "station-far", "system-far", "SalvageGuild", missionLevel: 4),
+                Rec("far-notable", "station-far", "system-far", "SalvageGuild", missionLevel: 12, subclass: "BountyMission")),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysFar(),
+            currentGameSeconds: 0);
         Assert.Single(section.Network);
         Assert.Equal("far-notable", section.Network[0].StoryId);
-        // Rumors would only catch it if it had a non-same-faction reason
-        // to reach, which it doesn't at this distance without fame.
         Assert.DoesNotContain(section.Rumors, e => e.StoryId == "far-trivial");
     }
 
     [Fact]
-    public void Build_UnreachableStation_ExcludedFromAllWindows()
+    public void Build_RecordOutsideMaxReachJumps_ExcludedFromAllWindows()
     {
-        // Station the adapter can't resolve (destroyed / unknown guid)
-        // fails the reach check on MaxValue distance. Must be filtered
-        // out of network AND rumors so the LLM never sees it as
-        // hearsay.
-        var log = new[]
-        {
-            Rec("ghost", "station-gone", "SalvageGuild", magnitude: 10),
-        };
+        // 20 jumps > MaxReachJumps (15) → bridge prefilter drops it.
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysUnreachable());
+            BridgeWith(Rec("too-far", "station-gone", "system-gone", "SalvageGuild", missionLevel: 20)),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysFar(jumps: 20));
         Assert.Empty(section.Network);
         Assert.Empty(section.Rumors);
     }
 
+    // ---- Rumors window ----
+
     [Fact]
     public void Build_RumorsWindow_CrossFactionStorylines()
     {
-        // Cross-faction events that meet the cross-faction reach gate
-        // (no same-faction bonus) land in rumors, not network.
-        var log = new[]
-        {
-            Rec("own-faction", "station-B", "SalvageGuild", magnitude: 3),  // network
-            Rec("marauders",   "station-C", "Marauders",    magnitude: 3),  // rumors
-        };
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+            BridgeWith(
+                Rec("own-faction", "station-B", "system-B", "SalvageGuild"),
+                Rec("marauders",   "station-C", "system-C", "Marauders")),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
         Assert.Single(section.Network);
         Assert.Equal("own-faction", section.Network[0].StoryId);
         Assert.Single(section.Rumors);
         Assert.Equal("marauders", section.Rumors[0].StoryId);
     }
 
+    // ---- Reach modifiers ----
+
     [Fact]
     public void Build_AgedEvent_FadesFromReach()
     {
-        // 10 jumps away (base=4), mag 4, 40 days old → age penalty +3 →
-        // required 7 → mag-4 fails. Drop it.
-        var ancient = Rec("ancient", "station-far", "SalvageGuild",
-            magnitude: 4, resolvedGameSeconds: 0);
-        var log = new[] { ancient };
-
+        // 10 jumps = band 4 base=4; age 40 days → +3 penalty; same-fac -1 → required 6.
+        // Level 10 Mission = mag 5 → OUT.
+        var ancient = Rec("ancient", "station-far", "system-far", "SalvageGuild",
+            missionLevel: 10, terminalAtGameSeconds: 0);
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild",
-            _ => 10,
+            BridgeWith(ancient),
+            BrokerStation, BrokerSystem, "SalvageGuild",
+            (_, _) => 10,
             currentGameSeconds: 40 * OneDay);
-
         Assert.Empty(section.Network);
         Assert.Empty(section.Rumors);
     }
 
     [Fact]
-    public void Build_FreshEvent_SameMagnitudeAndDistance_PassesReach()
-    {
-        // Same distance + magnitude as the Build_AgedEvent case, but
-        // fresh — required stays at 4, mag-4 passes.
-        var fresh = Rec("fresh", "station-far", "SalvageGuild",
-            magnitude: 4, resolvedGameSeconds: 39 * OneDay);
-        var log = new[] { fresh };
-
-        var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild",
-            _ => 10,
-            currentGameSeconds: 40 * OneDay);
-
-        Assert.Single(section.Network);
-    }
-
-    [Fact]
     public void Build_PlayerFame_PushesOtherwiseUnreachableEventsThrough()
     {
-        // 12 jumps (base=6), same-faction bonus (-1) → required 5 at
-        // fame=0. Mag-3 fails. With fame=15 (bonus -3), required drops
-        // to 2, mag-3 passes. Models the "CEO is known everywhere" rule.
-        var log = new[]
-        {
-            Rec("noteworthy", "station-far", "SalvageGuild", magnitude: 3),
-        };
-
+        // 12 jumps = base 6, same-fac -1 → required 5 at fame 0.
+        // Level 10 Mission = mag 5 — boundary IN. Use level 8 (mag 4) to
+        // keep it OUT at fame 0, then flip with fame 15 (bonus -3 → req 2).
+        var record = Rec("noteworthy", "station-far", "system-far", "SalvageGuild",
+            missionLevel: 8);
         var withoutFame = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", _ => 12,
-            currentGameSeconds: 0, playerFame: 0);
+            BridgeWith(record),
+            BrokerStation, BrokerSystem, "SalvageGuild",
+            AlwaysFar(), currentGameSeconds: 0, playerFame: 0);
         var withFame = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", _ => 12,
-            currentGameSeconds: 0, playerFame: 15);
-
+            BridgeWith(record),
+            BrokerStation, BrokerSystem, "SalvageGuild",
+            AlwaysFar(), currentGameSeconds: 0, playerFame: 15);
         Assert.Empty(withoutFame.Network);
         Assert.Empty(withoutFame.Rumors);
         Assert.Single(withFame.Network);
     }
 
-    [Fact]
-    public void Build_StoryIds_AppearInAtMostOneWindow()
-    {
-        // A record surfaced in Local must not also appear in Network or
-        // Rumors. Keeps the LLM's three-lens framing honest — an event
-        // is only told one way.
-        var log = new[]
-        {
-            Rec("big-local",  "station-A", "SalvageGuild", magnitude: 10),
-            Rec("big-net",    "station-B", "SalvageGuild", magnitude: 10),
-            Rec("big-rumor",  "station-C", "MiningGuild",  magnitude: 10),
-        };
-        var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+    // ---- Dedup across windows ----
 
-        var allStoryIds = section.Local.Select(e => e.StoryId)
+    [Fact]
+    public void Build_RecordsAppearInAtMostOneWindow()
+    {
+        var section = JournalContextBuilder.Build(
+            BridgeWith(
+                Rec("big-local", BrokerStation, BrokerSystem, "SalvageGuild", missionLevel: 20, subclass: "BountyMission"),
+                Rec("big-net",   "station-B",   "system-B",   "SalvageGuild", missionLevel: 20, subclass: "BountyMission"),
+                Rec("big-rumor", "station-C",   "system-C",   "MiningGuild",  missionLevel: 20, subclass: "BountyMission")),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
+        var allIds = section.Local.Select(e => e.StoryId)
             .Concat(section.Network.Select(e => e.StoryId))
             .Concat(section.Rumors.Select(e => e.StoryId))
             .ToList();
-        Assert.Equal(allStoryIds.Count, allStoryIds.Distinct().Count());
+        Assert.Equal(allIds.Count, allIds.Distinct().Count());
     }
+
+    [Fact]
+    public void Build_EmptyStoryId_UsesInstanceIdForDedup()
+    {
+        // Generator missions have empty StoryId — two records with empty
+        // storyIds must NOT collapse in the dedup set. Record A resolves
+        // local, record B has a distinct InstanceId and a station-B
+        // source → should land in network independently.
+        var a = new MissionRecord(
+            StoryId: "", MissionInstanceId: "inst-A",
+            MissionName: "Mission A", MissionSubclass: "Mission", MissionLevel: 10,
+            SourceStationId: BrokerStation, SourceStationName: "A",
+            SourceSystemId: BrokerSystem, SourceSystemName: "A",
+            SourceSectorId: null, SourceSectorName: null,
+            SourceFaction: "SalvageGuild",
+            TargetStationId: null, TargetStationName: null, TargetSystemId: null,
+            PlayerLevel: 0, PlayerShipName: null, PlayerShipLevel: null, PlayerCurrentSystemId: null,
+            Steps: new List<MissionStepDefinition>(),
+            Rewards: new List<MissionRewardSnapshot>(),
+            Timeline: new List<TimelineEntry>
+            {
+                new(TimelineState.Accepted, 100, "x"),
+                new(TimelineState.Completed, 200, "x"),
+            });
+        var b = a with { MissionInstanceId = "inst-B",
+            SourceStationId = "station-B", SourceSystemId = "system-B" };
+
+        var section = JournalContextBuilder.Build(
+            BridgeWith(a, b),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
+
+        Assert.Single(section.Local);
+        Assert.Equal("inst-A", section.Local[0].StoryId);
+        Assert.Single(section.Network);
+        Assert.Equal("inst-B", section.Network[0].StoryId);
+    }
+
+    // ---- Window caps ----
 
     [Fact]
     public void Build_WindowsRespectSizeCaps()
     {
-        // Overfill each window type — all at same station (→ local
-        // cap), all same-faction-elsewhere at 1 jump (→ network cap),
-        // all cross-faction at 1 jump magnitude-high (→ rumors cap).
-        var log = Enumerable.Range(0, 10).Select(i =>
-            Rec($"loc{i}", "station-A", "SalvageGuild", 5))
+        var records = Enumerable.Range(0, 10).Select(i =>
+            Rec($"loc{i}", BrokerStation, BrokerSystem, "SalvageGuild", missionLevel: 10,
+                terminalAtGameSeconds: 1000 + i))
             .Concat(Enumerable.Range(0, 10).Select(i =>
-                Rec($"net{i}", $"station-B{i}", "SalvageGuild", 5)))
+                Rec($"net{i}", $"station-B{i}", $"system-B{i}", "SalvageGuild", missionLevel: 10,
+                    terminalAtGameSeconds: 1000 + i)))
             .Concat(Enumerable.Range(0, 10).Select(i =>
-                Rec($"rum{i}", $"station-C{i}", "Marauders", 5)))
-            .ToList();
+                Rec($"rum{i}", $"station-C{i}", $"system-C{i}", "Marauders", missionLevel: 10,
+                    terminalAtGameSeconds: 1000 + i)))
+            .ToArray();
 
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+            BridgeWith(records),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
 
         Assert.Equal(JournalContextBuilder.LocalWindowSize,   section.Local.Count);
         Assert.Equal(JournalContextBuilder.NetworkWindowSize, section.Network.Count);
@@ -260,44 +357,67 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_OrdersRecentFirst()
     {
-        var log = new[]
-        {
-            Rec("oldest", "station-A", "SalvageGuild", 3, resolvedGameSeconds: 100),
-            Rec("middle", "station-A", "SalvageGuild", 3, resolvedGameSeconds: 200),
-            Rec("newest", "station-A", "SalvageGuild", 3, resolvedGameSeconds: 300),
-        };
         var section = JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", AlwaysAdjacent());
+            BridgeWith(
+                Rec("oldest", BrokerStation, BrokerSystem, "SalvageGuild", terminalAtGameSeconds: 100),
+                Rec("middle", BrokerStation, BrokerSystem, "SalvageGuild", terminalAtGameSeconds: 200),
+                Rec("newest", BrokerStation, BrokerSystem, "SalvageGuild", terminalAtGameSeconds: 300)),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
         Assert.Equal("newest", section.Local[0].StoryId);
         Assert.Equal("middle", section.Local[1].StoryId);
         Assert.Equal("oldest", section.Local[2].StoryId);
     }
 
     [Fact]
-    public void Build_DistanceLookup_CachedPerUniqueStationGuid()
+    public void Build_DistanceLookup_CachedPerUniqueSourceSystem()
     {
-        // Same station guid across multiple records should only trigger
-        // one jump-distance lookup — the cache matters for perf at
-        // scale (50 completed missions × multiple duplicates).
         var callCount = 0;
-        Func<string, int> instrumented = _ => { callCount++; return 1; };
+        Func<string, string, int> instrumented = (_, _) => { callCount++; return 1; };
 
-        var log = new[]
-        {
-            Rec("s1", "station-B", "SalvageGuild", 3),
-            Rec("s2", "station-B", "SalvageGuild", 3),
-            Rec("s3", "station-B", "SalvageGuild", 3),
-        };
         JournalContextBuilder.Build(
-            log, "station-A", "SalvageGuild", instrumented);
+            BridgeWith(
+                Rec("s1", "station-B1", "system-B", "SalvageGuild"),
+                Rec("s2", "station-B2", "system-B", "SalvageGuild"),
+                Rec("s3", "station-B3", "system-B", "SalvageGuild")),
+            BrokerStation, BrokerSystem, "SalvageGuild", instrumented);
 
-        // Two windows (network + rumors) both do the same station lookup,
-        // but the per-build cache collapses them to one call per unique
-        // station guid. With only station-B represented, we expect 1.
-        Assert.Equal(1, callCount);
+        // Bridge calls jumpDistance once per record during the
+        // GetMissionsWithinJumps prefilter (3 calls). Then the builder's
+        // distanceCache collapses per-window lookups to one per unique
+        // source system (system-B → 1 call). Total: 3 (prefilter) + 1
+        // (builder cache) = 4. Asserting ≤ 4 proves the builder's cache
+        // eliminates redundant per-window lookups.
+        Assert.True(callCount <= 4,
+            $"Expected ≤4 jumpDistance calls (3 prefilter + 1 cached); got {callCount}");
     }
 
-    // ---------- Active window (in-flight entries, unchanged behavior) ----------
+    [Fact]
+    public void Build_ExcludesActiveRecordsFromResolvedWindows()
+    {
+        // In-flight record (no terminal entry) must not appear in
+        // local/network/rumors — those are for resolved history only.
+        var active = new MissionRecord(
+            StoryId: "active-1", MissionInstanceId: "active-1",
+            MissionName: "Still Running", MissionSubclass: "Mission", MissionLevel: 10,
+            SourceStationId: BrokerStation, SourceStationName: "A",
+            SourceSystemId: BrokerSystem, SourceSystemName: "A",
+            SourceSectorId: null, SourceSectorName: null,
+            SourceFaction: "SalvageGuild",
+            TargetStationId: null, TargetStationName: null, TargetSystemId: null,
+            PlayerLevel: 0, PlayerShipName: null, PlayerShipLevel: null, PlayerCurrentSystemId: null,
+            Steps: new List<MissionStepDefinition>(),
+            Rewards: new List<MissionRewardSnapshot>(),
+            Timeline: new List<TimelineEntry> { new(TimelineState.Accepted, 100, "x") });
+
+        var section = JournalContextBuilder.Build(
+            BridgeWith(active),
+            BrokerStation, BrokerSystem, "SalvageGuild", AlwaysAdjacent());
+        Assert.Empty(section.Local);
+        Assert.Empty(section.Network);
+        Assert.Empty(section.Rumors);
+    }
+
+    // ---- Active window (in-flight PersistedEntry source, unchanged shape) ----
 
     private static PersistedEntry InFlight(
         string storyId, string stationId, string faction, double createdGameSeconds = 100.0)
@@ -328,7 +448,7 @@ public class JournalContextBuilderTests
     public void Build_Active_NullInput_ReturnsEmpty()
     {
         var section = JournalContextBuilder.Build(
-            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
+            BridgeWith(), BrokerStation, BrokerSystem, "SalvageGuild",
             AlwaysAdjacent(), inFlight: null);
         Assert.Empty(section.Active);
     }
@@ -336,15 +456,15 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_Active_FiltersToSameStationOrSameFaction()
     {
-        var inFlight = new[]
-        {
-            InFlight("e1", "station-A", "SalvageGuild"),
-            InFlight("e2", "station-X", "MiningGuild"),
-            InFlight("e3", "station-B", "SalvageGuild"),
-        };
         var section = JournalContextBuilder.Build(
-            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
-            AlwaysAdjacent(), inFlight: inFlight);
+            BridgeWith(), BrokerStation, BrokerSystem, "SalvageGuild",
+            AlwaysAdjacent(),
+            inFlight: new[]
+            {
+                InFlight("e1", BrokerStation, "SalvageGuild"),
+                InFlight("e2", "station-X",   "MiningGuild"),
+                InFlight("e3", "station-B",   "SalvageGuild"),
+            });
         Assert.Equal(2, section.Active.Count);
         Assert.All(section.Active,
             e => Assert.Contains(e.StoryId, new[] { "e1", "e3" }));
@@ -353,15 +473,15 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_Active_OrdersByStationThenFaction()
     {
-        var inFlight = new[]
-        {
-            InFlight("e-far",    "station-B", "SalvageGuild", createdGameSeconds: 50),
-            InFlight("e-local1", "station-A", "SalvageGuild", createdGameSeconds: 20),
-            InFlight("e-local2", "station-A", "SalvageGuild", createdGameSeconds: 30),
-        };
         var section = JournalContextBuilder.Build(
-            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
-            AlwaysAdjacent(), inFlight: inFlight);
+            BridgeWith(), BrokerStation, BrokerSystem, "SalvageGuild",
+            AlwaysAdjacent(),
+            inFlight: new[]
+            {
+                InFlight("e-far",    "station-B",    "SalvageGuild", createdGameSeconds: 50),
+                InFlight("e-local1", BrokerStation,  "SalvageGuild", createdGameSeconds: 20),
+                InFlight("e-local2", BrokerStation,  "SalvageGuild", createdGameSeconds: 30),
+            });
         Assert.Equal(3, section.Active.Count);
         Assert.Equal("e-local2", section.Active[0].StoryId);
         Assert.Equal("e-local1", section.Active[1].StoryId);
@@ -371,10 +491,10 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_Active_MarksEntriesAsInProgress()
     {
-        var inFlight = new[] { InFlight("e1", "station-A", "SalvageGuild") };
         var section = JournalContextBuilder.Build(
-            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
-            AlwaysAdjacent(), inFlight: inFlight);
+            BridgeWith(), BrokerStation, BrokerSystem, "SalvageGuild",
+            AlwaysAdjacent(),
+            inFlight: new[] { InFlight("e1", BrokerStation, "SalvageGuild") });
         Assert.Single(section.Active);
         Assert.Equal(CompletedMissionOutcomes.InProgress, section.Active[0].Outcome);
     }
@@ -382,13 +502,13 @@ public class JournalContextBuilderTests
     [Fact]
     public void Build_Active_RespectsSizeCap()
     {
-        var inFlight = Enumerable.Range(0, 20)
-            .Select(i => InFlight($"e{i}", "station-A", "SalvageGuild",
-                                  createdGameSeconds: i))
-            .ToList();
         var section = JournalContextBuilder.Build(
-            new List<CompletedMissionRecord>(), "station-A", "SalvageGuild",
-            AlwaysAdjacent(), inFlight: inFlight);
+            BridgeWith(), BrokerStation, BrokerSystem, "SalvageGuild",
+            AlwaysAdjacent(),
+            inFlight: Enumerable.Range(0, 20)
+                .Select(i => InFlight($"e{i}", BrokerStation, "SalvageGuild",
+                                      createdGameSeconds: i))
+                .ToList());
         Assert.Equal(JournalContextBuilder.ActiveWindowSize, section.Active.Count);
     }
 }

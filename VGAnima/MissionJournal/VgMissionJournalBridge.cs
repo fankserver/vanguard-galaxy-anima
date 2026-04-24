@@ -28,46 +28,54 @@ internal sealed class VgMissionJournalBridge
 {
     private const string PluginGuid = "vgmissionjournal";
 
-    public bool IsAvailable { get; }
+    private readonly IMissionJournalQuery? _query;
 
+    public bool IsAvailable => _query != null;
+
+    /// <summary>Production constructor: reads
+    /// <see cref="MissionJournalApi.Current"/> after confirming the
+    /// plugin is loaded via <see cref="Chainloader.PluginInfos"/>.
+    /// Both paths catch — xUnit's AppDomain doesn't have BepInEx
+    /// initialized and accessing Chainloader there throws.</summary>
     public VgMissionJournalBridge()
     {
-        // Guard: accessing Chainloader.PluginInfos triggers BepInEx
-        // ConfigFile static initialization which crashes in xUnit's
-        // AppDomain (no BepInEx runtime). Treat any access failure as
-        // "plugin absent" — a reasonable posture since the only time
-        // Chainloader throws is when BepInEx itself isn't around.
         try
         {
-            IsAvailable = Chainloader.PluginInfos != null
+            var present = Chainloader.PluginInfos != null
                           && Chainloader.PluginInfos.ContainsKey(PluginGuid);
+            _query = present ? MissionJournalApi.Current : null;
         }
         catch
         {
-            IsAvailable = false;
+            _query = null;
         }
+    }
+
+    /// <summary>Test-only constructor — inject a fake
+    /// <see cref="IMissionJournalQuery"/> to exercise the
+    /// journal-builder path without a live BepInEx runtime. Null input
+    /// is equivalent to "plugin absent."</summary>
+    internal VgMissionJournalBridge(IMissionJournalQuery? query)
+    {
+        _query = query;
     }
 
     /// <summary>In-flight missions (accept with no terminal outcome yet).
     /// Used for the journal's active window — duplicate-avoidance when
     /// the LLM pitches new missions.</summary>
-    public IReadOnlyList<MissionRecord> GetActiveMissions()
-    {
-        if (!IsAvailable) return Array.Empty<MissionRecord>();
-        return GetActiveMissionsInner();
-    }
+    public IReadOnlyList<MissionRecord> GetActiveMissions() =>
+        _query?.GetActiveMissions() ?? Array.Empty<MissionRecord>();
 
     /// <summary>Missions sourced at the given station's system, within
     /// the time window. <paramref name="sinceGameSeconds"/> defaults to
     /// 0 (entire history); pass <c>currentGameSeconds - N*86400</c> for
-    /// a last-N-days slice. Returns empty when
-    /// <see cref="IsAvailable"/> is false.</summary>
+    /// a last-N-days slice.</summary>
     public IReadOnlyList<MissionRecord> GetMissionsInSystem(
         string systemId, double sinceGameSeconds = 0.0)
     {
-        if (!IsAvailable) return Array.Empty<MissionRecord>();
         if (string.IsNullOrEmpty(systemId)) return Array.Empty<MissionRecord>();
-        return GetMissionsInSystemInner(systemId, sinceGameSeconds);
+        return _query?.GetMissionsInSystem(systemId, sinceGameSeconds)
+               ?? Array.Empty<MissionRecord>();
     }
 
     /// <summary>Missions with the given source-faction identifier, within
@@ -75,58 +83,22 @@ internal sealed class VgMissionJournalBridge
     public IReadOnlyList<MissionRecord> GetMissionsByFaction(
         string factionId, double sinceGameSeconds = 0.0)
     {
-        if (!IsAvailable) return Array.Empty<MissionRecord>();
         if (string.IsNullOrEmpty(factionId)) return Array.Empty<MissionRecord>();
-        return GetMissionsByFactionInner(factionId, sinceGameSeconds);
+        return _query?.GetMissionsByFaction(factionId, sinceGameSeconds)
+               ?? Array.Empty<MissionRecord>();
     }
 
     /// <summary>Missions sourced within <paramref name="maxJumps"/> of
     /// the pivot system. <paramref name="jumpDistance"/> is the graph
-    /// closure — same shape VGAnima already uses for
-    /// <see cref="Galaxy.GalaxyDistance.JumpsBetween"/>.</summary>
+    /// closure — same <c>(sysA, sysB) → jumps</c> shape VGMissionJournal's
+    /// own API takes.</summary>
     public IReadOnlyList<MissionRecord> GetMissionsWithinJumps(
         string pivotSystemId, int maxJumps,
         Func<string, string, int> jumpDistance,
         double sinceGameSeconds = 0.0)
     {
-        if (!IsAvailable) return Array.Empty<MissionRecord>();
         if (string.IsNullOrEmpty(pivotSystemId)) return Array.Empty<MissionRecord>();
-        return GetMissionsWithinJumpsInner(pivotSystemId, maxJumps, jumpDistance, sinceGameSeconds);
-    }
-
-    // ---- Plugin-present paths, split so the JIT doesn't resolve the
-    // VGMissionJournal types until IsAvailable is true. Naming convention:
-    // *Inner() functions contain every reference to VGMissionJournal types;
-    // the public wrappers above contain no such references in their body,
-    // only in their signature (loaded lazily).
-
-    private IReadOnlyList<MissionRecord> GetActiveMissionsInner()
-    {
-        var api = MissionJournalApi.Current;
-        return api?.GetActiveMissions() ?? Array.Empty<MissionRecord>();
-    }
-
-    private IReadOnlyList<MissionRecord> GetMissionsInSystemInner(
-        string systemId, double sinceGS)
-    {
-        var api = MissionJournalApi.Current;
-        return api?.GetMissionsInSystem(systemId, sinceGS) ?? Array.Empty<MissionRecord>();
-    }
-
-    private IReadOnlyList<MissionRecord> GetMissionsByFactionInner(
-        string factionId, double sinceGS)
-    {
-        var api = MissionJournalApi.Current;
-        return api?.GetMissionsByFaction(factionId, sinceGS) ?? Array.Empty<MissionRecord>();
-    }
-
-    private IReadOnlyList<MissionRecord> GetMissionsWithinJumpsInner(
-        string pivotSystemId, int maxJumps,
-        Func<string, string, int> jumpDistance, double sinceGS)
-    {
-        var api = MissionJournalApi.Current;
-        return api?.GetMissionsWithinJumps(
-            pivotSystemId, maxJumps, jumpDistance, sinceGS)
-            ?? Array.Empty<MissionRecord>();
+        return _query?.GetMissionsWithinJumps(pivotSystemId, maxJumps, jumpDistance, sinceGameSeconds)
+               ?? Array.Empty<MissionRecord>();
     }
 }

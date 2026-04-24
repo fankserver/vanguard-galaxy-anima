@@ -1,38 +1,41 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using VGAnima.MissionJournal;
 using VGAnima.Missions;
 using VGAnima.Persistence;
+using VGMissionJournal.Logging;
 
 namespace VGAnima.Llm;
 
-/// <summary>Filters the <see cref="PersistedBrokerRegistry"/>'s completed-
-/// mission log through an NPC-perspective lens: each broker only sees
-/// what they would plausibly know given their station, faction, the
-/// event's magnitude, the distance from where it happened, its age,
-/// and the player's galactic fame. Four windows compose the view:
+/// <summary>Filters VGMissionJournal's mission records through an
+/// NPC-perspective lens: each broker only sees what they would
+/// plausibly know given their station, faction, the event's magnitude,
+/// the distance from where it happened, its age, and the player's
+/// galactic fame. Four windows compose the view:
 /// <list type="bullet">
 ///   <item><c>local</c> — recent events at THIS station. Bar gossip.
 ///   Always visible, highest fidelity.</item>
 ///   <item><c>network</c> — resolved events within reach via the
-///   faction's internal network (same <c>source_faction</c> as the
-///   broker, close enough for the reach formula to pass).</item>
+///   faction's internal network (same source-faction as the broker,
+///   close enough for the reach formula to pass).</item>
 ///   <item><c>rumors</c> — distant hearsay that reached the broker
 ///   despite being out-of-network — either different faction, or same
 ///   faction far enough away that only magnitude pushed it through.</item>
-///   <item><c>active</c> — in-flight offered/accepted missions the
-///   broker plausibly knows about. Duplicate-avoidance signal.</item>
+///   <item><c>active</c> — in-flight offered/accepted VGAnima missions
+///   the broker plausibly knows about. Duplicate-avoidance signal.</item>
 /// </list>
 ///
-/// <para>Reach is governed by <see cref="MagnitudeReachFormula"/>. Each
-/// resolved record appears in at most one window; a storyId already
-/// surfaced in <c>local</c> is excluded from <c>network</c> and
-/// <c>rumors</c>, and a storyId in <c>network</c> is excluded from
-/// <c>rumors</c>. The LLM's "three-lens" narrative framing stays honest
-/// — no event is told three different ways.</para>
+/// <para>Reach is governed by <see cref="MagnitudeReachFormula"/>.
+/// Resolved windows are sourced from <see cref="VgMissionJournalBridge"/>;
+/// the active window stays on <see cref="PersistedBrokerRegistry"/>
+/// because Offered-but-not-yet-accepted VGAnima missions don't reach
+/// VGMissionJournal until accept.</para>
 ///
-/// <para>Windows are returned recent-first (most recent at index 0);
-/// size caps shape both context JSON size and the LLM's attention.</para></summary>
+/// <para>Dedup across resolved windows uses storyId when populated and
+/// <see cref="MissionRecord.MissionInstanceId"/> as fallback — vanilla
+/// generator missions have empty StoryId so StoryId alone would collapse
+/// many distinct records into one dedup bucket.</para></summary>
 internal static class JournalContextBuilder
 {
     public const int LocalWindowSize   = 5;
@@ -40,123 +43,153 @@ internal static class JournalContextBuilder
     public const int RumorsWindowSize  = 3;
     /// <summary>Cap on the in-flight window. In-flight entry count is
     /// naturally bounded (brokers are transient), so the cap is mostly
-    /// defensive. 8 entries ≈ every possible offer across the player's
-    /// current quadrant at busy pace.</summary>
+    /// defensive.</summary>
     public const int ActiveWindowSize  = 8;
 
-    /// <summary>Builds a filtered view of the journal for the broker
-    /// at <paramref name="stationId"/> aligned with
-    /// <paramref name="factionIdentifier"/>.
+    /// <summary>Jump-range cap for the bridge prefilter. The reach
+    /// formula's worst-case "maximum mag-10 famous-player" could
+    /// theoretically reach anywhere — but in a 15-jump radius we cover
+    /// the effective galaxy. Tighter prefilters reduce the per-broker
+    /// record scan without changing the visible result in practice.</summary>
+    public const int MaxReachJumps = 15;
+
+    /// <summary>Age cap for the bridge prefilter. Older resolved
+    /// missions would fail the reach formula's age penalty anyway
+    /// (+3 above 30 days pushes most records out); 90 days is the
+    /// point beyond which only famous high-magnitude combat would
+    /// still surface, and those are rare enough to be acceptable
+    /// losses.</summary>
+    public const double MaxRecordAgeDays = 90.0;
+
+    /// <summary>Builds a filtered view of the journal for the broker.
     ///
-    /// <param name="jumpsFromStationToBroker">Given a resolved-station
-    /// guid, returns the jump distance from THAT station's system to
-    /// the broker's current system. Production implementation looks the
-    /// station up via <c>GalaxyMapData.current.GetPointOfInterest</c>
-    /// then runs <see cref="Galaxy.GalaxyDistance.JumpsBetween"/>
-    /// against a vanilla jumpgate adapter. Returns <c>int.MaxValue</c>
-    /// for destroyed / unknown stations so the reach check fails safely
-    /// (filtered out as unreachable). <c>null</c> accepted for callers
-    /// that don't care about distance — such entries land in rumors
-    /// only when magnitude alone clears the unknown-distance band.</param>
-    ///
-    /// <param name="currentGameSeconds">Used by the age penalty in
-    /// <see cref="MagnitudeReachFormula"/>. Zero disables age decay
-    /// effectively (treats everything as fresh).</param>
-    ///
+    /// <param name="bridge">Source of resolved-mission records. When
+    /// VGMissionJournal is absent the bridge returns empty lists and
+    /// all three resolved windows end up empty.</param>
+    /// <param name="brokerStationId">The broker's current station guid
+    /// — used for the local-window station match.</param>
+    /// <param name="brokerSystemId">The broker's current system guid
+    /// — pivot for the jump-distance math.</param>
+    /// <param name="factionIdentifier">The broker's faction identifier
+    /// — drives same-faction bonus and network/rumors split.</param>
+    /// <param name="jumpDistance">System→system jump graph closure. Same
+    /// <c>(fromSys, toSys) → jumps</c> shape VGMissionJournal's proximity
+    /// API takes.</param>
+    /// <param name="currentGameSeconds">Used by the age penalty. Also
+    /// drives the 90-day bridge prefilter.</param>
     /// <param name="playerFame">Max of bounty / patrol / industry ranks.
-    /// Feeds <see cref="MagnitudeReachFormula.FameBonus"/>.</param></summary>
+    /// Feeds <see cref="MagnitudeReachFormula.FameBonus"/>.</param>
+    /// <param name="inFlight">VGAnima persisted offered/accepted entries
+    /// for the active window.</param></summary>
     public static LlmJournalSection Build(
-        IReadOnlyList<CompletedMissionRecord> log,
-        string stationId,
+        VgMissionJournalBridge bridge,
+        string brokerStationId,
+        string brokerSystemId,
         string factionIdentifier,
-        Func<string, int>? jumpsFromStationToBroker = null,
+        Func<string, string, int> jumpDistance,
         double currentGameSeconds = 0,
         int playerFame = 0,
         IReadOnlyCollection<PersistedEntry>? inFlight = null)
     {
-        // Recent-first iteration — log is stored oldest-first, so reverse
-        // it once and slice the windows off that.
-        var recentFirst = log.Reverse().ToList();
+        var sinceGameSeconds = currentGameSeconds > MaxRecordAgeDays * 86400.0
+            ? currentGameSeconds - MaxRecordAgeDays * 86400.0
+            : 0.0;
 
-        // Pre-compute per-record (jumpsAway, ageDays, sameFaction) so
-        // each window filter doesn't redo the work. Memoizes the
-        // station→jumps lookup implicitly: if the same station resolves
-        // multiple missions we only pay the lookup cost once per unique
-        // stationId (see distance cache below).
+        // Single proximity query prefilters by system-distance + age; we
+        // still apply the full reach formula per record to classify.
+        var records = string.IsNullOrEmpty(brokerSystemId)
+            ? Array.Empty<MissionRecord>()
+            : bridge.GetMissionsWithinJumps(
+                brokerSystemId, MaxReachJumps, jumpDistance, sinceGameSeconds);
+
+        // Resolved-only, newest-first by terminal time.
+        var resolved = records
+            .Where(r => !r.IsActive && r.Outcome.HasValue)
+            .OrderByDescending(r => r.TerminalAtGameSeconds ?? 0.0)
+            .ToList();
+
+        // Distance cache — same source system resolves to the same jump
+        // count, so memoize across the three window passes.
         var distanceCache = new Dictionary<string, int>(StringComparer.Ordinal);
-        int JumpsFor(string stationGuid)
+        int JumpsFor(string fromSystemId)
         {
-            if (jumpsFromStationToBroker == null) return int.MaxValue;
-            if (distanceCache.TryGetValue(stationGuid, out var cached)) return cached;
-            var computed = jumpsFromStationToBroker(stationGuid);
-            // Negative values from GalaxyDistance.JumpsBetween (disconnected)
-            // map to MaxValue for the reach formula — unreachable is
-            // unreachable regardless of why.
+            if (string.IsNullOrEmpty(fromSystemId)) return int.MaxValue;
+            if (distanceCache.TryGetValue(fromSystemId, out var cached)) return cached;
+            var computed = jumpDistance(fromSystemId, brokerSystemId);
             if (computed < 0) computed = int.MaxValue;
-            distanceCache[stationGuid] = computed;
+            distanceCache[fromSystemId] = computed;
             return computed;
         }
 
-        var local = recentFirst
-            .Where(r => r.StationId == stationId)
-            .Take(LocalWindowSize)
-            .Select(r => ToSnapshot(r, jumpsFromHere: 0))
-            .ToList();
+        // ---- Local ----
+        var local = new List<LlmJournalEntry>();
+        foreach (var r in resolved)
+        {
+            if (local.Count >= LocalWindowSize) break;
+            if (r.SourceStationId == brokerStationId)
+                local.Add(ToSnapshot(r, jumpsFromHere: 0));
+        }
+        var seen = new HashSet<string>(local.Select(DedupKey), StringComparer.Ordinal);
 
-        var localStoryIds = new HashSet<string>(local.Select(s => s.StoryId));
-
-        // Network window: same-faction events within reach, excluding
-        // local entries. Reach formula combines distance, age, fame,
-        // and same-faction bonus.
+        // ---- Network ----
         var network = new List<LlmJournalEntry>();
-        foreach (var r in recentFirst)
+        foreach (var r in resolved)
         {
             if (network.Count >= NetworkWindowSize) break;
-            if (r.SourceFaction != factionIdentifier) continue;
-            if (localStoryIds.Contains(r.StoryId))   continue;
-            if (r.StationId    == stationId)         continue;
+            if (string.IsNullOrEmpty(r.SourceSystemId))        continue;
+            if (seen.Contains(DedupKey(r)))                    continue;
+            if (r.SourceStationId == brokerStationId)          continue;
+            if (r.SourceFaction   != factionIdentifier)        continue;
 
-            var jumpsAway = JumpsFor(r.StationId);
-            if (jumpsAway == int.MaxValue) continue;   // unreachable
-            var ageDays  = Math.Max(0, (currentGameSeconds - r.ResolvedGameSeconds) / 86400.0);
+            var jumpsAway = JumpsFor(r.SourceSystemId!);
+            if (jumpsAway == int.MaxValue) continue;
+
+            var ageDays  = Math.Max(0,
+                (currentGameSeconds - (r.TerminalAtGameSeconds ?? 0.0)) / 86400.0);
+            var mag      = MagnitudeDerivation.Derive(r);
             var required = MagnitudeReachFormula.RequiredMagnitude(
                 jumpsAway, ageDays, sameFaction: true, fame: playerFame);
-            var included = r.MagnitudeScore >= required;
+            var included = mag >= required;
 
-            LogReachDecision(r, jumpsAway, ageDays, required, included, "network");
+            LogReachDecision(r, mag, jumpsAway, ageDays, required, included, "network");
 
-            if (included) network.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
+            if (included)
+            {
+                network.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
+                seen.Add(DedupKey(r));
+            }
         }
 
-        var networkStoryIds = new HashSet<string>(network.Select(s => s.StoryId));
-
-        // Rumors window: everything else in reach — different faction,
-        // or same faction that didn't make the network cut for other
-        // reasons (unlikely but possible). Cross-faction records get
-        // sameFaction=false in the reach check, so they need one
-        // magnitude-point more to push through.
+        // ---- Rumors ----
         var rumors = new List<LlmJournalEntry>();
-        foreach (var r in recentFirst)
+        foreach (var r in resolved)
         {
             if (rumors.Count >= RumorsWindowSize) break;
-            if (localStoryIds.Contains(r.StoryId))   continue;
-            if (networkStoryIds.Contains(r.StoryId)) continue;
-            if (r.StationId    == stationId)         continue;
+            if (string.IsNullOrEmpty(r.SourceSystemId))        continue;
+            if (seen.Contains(DedupKey(r)))                    continue;
+            if (r.SourceStationId == brokerStationId)          continue;
 
-            var jumpsAway = JumpsFor(r.StationId);
+            var jumpsAway = JumpsFor(r.SourceSystemId!);
             if (jumpsAway == int.MaxValue) continue;
-            var ageDays     = Math.Max(0, (currentGameSeconds - r.ResolvedGameSeconds) / 86400.0);
+
+            var ageDays     = Math.Max(0,
+                (currentGameSeconds - (r.TerminalAtGameSeconds ?? 0.0)) / 86400.0);
             var sameFaction = r.SourceFaction == factionIdentifier;
+            var mag         = MagnitudeDerivation.Derive(r);
             var required    = MagnitudeReachFormula.RequiredMagnitude(
                 jumpsAway, ageDays, sameFaction: sameFaction, fame: playerFame);
-            var included    = r.MagnitudeScore >= required;
+            var included    = mag >= required;
 
-            LogReachDecision(r, jumpsAway, ageDays, required, included, "rumors");
+            LogReachDecision(r, mag, jumpsAway, ageDays, required, included, "rumors");
 
-            if (included) rumors.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
+            if (included)
+            {
+                rumors.Add(ToSnapshot(r, jumpsFromHere: jumpsAway));
+                seen.Add(DedupKey(r));
+            }
         }
 
-        var active = BuildActiveWindow(inFlight, stationId, factionIdentifier);
+        var active = BuildActiveWindow(inFlight, brokerStationId, factionIdentifier);
 
         return new LlmJournalSection
         {
@@ -167,12 +200,18 @@ internal static class JournalContextBuilder
         };
     }
 
+    /// <summary>Stable per-record key for cross-window dedup. StoryId
+    /// when populated (authored story missions), MissionInstanceId
+    /// otherwise (generator missions — vanilla leaves StoryId empty).</summary>
+    private static string DedupKey(MissionRecord r) =>
+        string.IsNullOrEmpty(r.StoryId) ? r.MissionInstanceId : r.StoryId;
+
+    private static string DedupKey(LlmJournalEntry e) => e.StoryId;
+
     /// <summary>Projects in-flight persisted entries (state = offered or
-    /// accepted) into the <c>active</c> window, filtered by the same
-    /// proximity lens as the other windows. Union of "at this station"
-    /// and "same faction elsewhere" — broker awareness, not omniscience.
-    /// Magnitude is recomputed on the fly since in-flight entries don't
-    /// carry a resolved outcome yet.
+    /// accepted) into the active window, filtered by same-station OR
+    /// same-faction. Magnitude is recomputed on the fly since in-flight
+    /// entries don't carry a resolved outcome yet.
     ///
     /// <para>The active window intentionally does NOT use the reach
     /// formula — we want the broker aware of any offered mission in
@@ -184,11 +223,8 @@ internal static class JournalContextBuilder
         string factionIdentifier)
     {
         if (inFlight is null || inFlight.Count == 0)
-            return System.Array.Empty<LlmJournalEntry>();
+            return Array.Empty<LlmJournalEntry>();
 
-        // Score: 2 = same station (highest priority), 1 = same faction
-        // elsewhere, 0 = neither (filtered out). Stable order for ties
-        // is "newest first" using createdGameSeconds.
         var ranked = new List<(int prio, PersistedEntry entry)>();
         foreach (var e in inFlight)
         {
@@ -200,7 +236,7 @@ internal static class JournalContextBuilder
         }
         ranked.Sort((a, b) =>
         {
-            if (a.prio != b.prio) return b.prio.CompareTo(a.prio); // high prio first
+            if (a.prio != b.prio) return b.prio.CompareTo(a.prio);
             return b.entry.Timestamps.CreatedGameSeconds
                     .CompareTo(a.entry.Timestamps.CreatedGameSeconds);
         });
@@ -211,24 +247,29 @@ internal static class JournalContextBuilder
             .ToList();
     }
 
-    private static LlmJournalEntry ToSnapshot(CompletedMissionRecord r, int jumpsFromHere) =>
-        new(r.StoryId, r.MissionName, r.Archetype, r.Outcome, r.SourceFaction,
-            r.StationName, r.SystemName, r.ResolvedGameSeconds, r.MagnitudeScore,
-            JumpsFromHere: jumpsFromHere);
+    /// <summary>Record → snapshot. Uses StoryId-or-InstanceId so the
+    /// LLM has a non-empty reference string per entry (empty storyIds
+    /// confuse the prompt's "don't offer an id you've already used" rule).</summary>
+    private static LlmJournalEntry ToSnapshot(MissionRecord r, int jumpsFromHere) =>
+        new(
+            StoryId:             DedupKey(r),
+            MissionName:         r.MissionName ?? "",
+            Archetype:           MissionRecordArchetype.Infer(r),
+            Outcome:             MissionRecordArchetype.OutcomeString(r.Outcome),
+            SourceFaction:       r.SourceFaction ?? "",
+            StationName:         r.SourceStationName ?? "",
+            SystemName:          r.SourceSystemName ?? "",
+            ResolvedGameSeconds: MissionRecordArchetype.ResolvedGameSeconds(r),
+            Magnitude:           MagnitudeDerivation.Derive(r),
+            JumpsFromHere:       jumpsFromHere);
 
-    /// <summary>Tuning log for the reach formula. Emits one debug line
-    /// per record evaluated against a window so post-hoc analysis of a
-    /// session's prompts can explain why each mission did or didn't
-    /// surface. Plugin.Log is used directly rather than threaded
-    /// through as a dependency — the builder is already static, one
-    /// more static reference is fine for a log-only concern.</summary>
     private static void LogReachDecision(
-        CompletedMissionRecord r, int jumpsAway, double ageDays,
+        MissionRecord r, int mag, int jumpsAway, double ageDays,
         int required, bool included, string window)
     {
         Plugin.Log?.LogDebug(
-            $"Reach[{window}]: '{r.MissionName}' ({r.Archetype} {r.SourceFaction}) " +
-            $"mag={r.MagnitudeScore} jumps={jumpsAway} age={ageDays:F1}d " +
+            $"Reach[{window}]: '{r.MissionName}' ({r.MissionSubclass} {r.SourceFaction}) " +
+            $"mag={mag} jumps={jumpsAway} age={ageDays:F1}d " +
             $"req={required} {(included ? "IN" : "OUT")}");
     }
 
@@ -236,13 +277,8 @@ internal static class JournalContextBuilder
     {
         var block     = e.MissionBlock;
         var archetype = ArchetypeInferrer.Infer(block);
-        // Use the entry's "created" time as the journal timestamp for
-        // in-flight missions — that's when the offer appeared.
-        // Magnitude is re-scored with a synthetic "completed" outcome so
-        // a comparable value surfaces; LLM uses it only for relative
-        // weighting, not for outcome-aware scoring.
-        var missionLevel = 10; // unknown at in-flight time; use a neutral default
-        var magnitude    = MagnitudeScorer.Score(
+        const int missionLevel = 10;
+        var magnitude = MagnitudeScorer.Score(
             block, archetype, CompletedMissionOutcomes.Completed, missionLevel);
         return new LlmJournalEntry(
             StoryId:             e.StoryId,
