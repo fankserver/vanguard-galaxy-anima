@@ -50,30 +50,33 @@ make clean             # removes bin/ obj/ dist/
 - `factions` — all 18 vanilla factions keyed by identifier, each carrying display name (e.g. `Marauders` → *Corsair Syndicate*), reputation value, and relation band (`friendly` / `neutral` / `hostile`, matching vanilla `FactionData.IsEnemy` — hostile iff `at_war` or `rep < -500`).
 - `reward_clamps` — numeric bounds for credit / XP / reputation amounts.
 - `mission_guidance` — **pre-computed ranked archetype weights + forbidden list + rationale**. See below.
-- `missions` — active story IDs, recent archive tail, ladder levels.
-- `journal` — per-broker view of resolved + in-flight VGAnima missions in four windows:
-  - `local` (events at this station), `network` (same-faction events within reach), `rumors` (distant hearsay — different faction or far away), `active` (in-flight offered/accepted missions).
+- `missions` — ladder levels (bounty/patrol/industry). Story IDs feed server-side guidance via `MissionGuidanceBuilder` but are JsonIgnored out of the prompt (machine hashes, not dialogue material).
+- `journal` — per-broker view of resolved + in-flight missions in four windows:
+  - `local` (events at this station), `network` (same-faction events within reach), `rumors` (distant hearsay — different faction or far away), `active` (in-flight offered/accepted VGAnima missions).
+  - Resolved entries are sourced from the sibling mod **VGMissionJournal** via a soft typed dependency (`VgMissionJournalBridge`) — it logs *all* mission terminations, vanilla + VGAnima. In-flight entries stay on VGAnima's own `PersistedBrokerRegistry` (offered-but-not-yet-accepted jobs don't reach VGMissionJournal until accept).
   - Reach is distance-attenuated: gossip always travels to neighbors (1-2 jumps), further systems gate on magnitude, age penalty raises the bar over time, fame bonus (max of bounty/patrol/industry rank) pushes famous-player events farther. Each entry carries `jumps_from_here` so the broker can voice the narrative distance. See `MagnitudeReachFormula`.
+  - Each entry carries an `objectives` array (multi-label tags: `kill_enemies` / `protect_unit` / `mine_ore` / `collect_salvage` / `haul_goods` / `collect_items` / `travel`) drawn from the mission's actual vanilla objective types — a defended-salvage run surfaces as `[collect_salvage, kill_enemies]` so the LLM sees both shapes rather than a lossy single-label collapse.
 - `bar_ecosystem` — other salesmen currently at the bar (Prospector, Salvage Scout, Equipment Rep, etc.) so the broker can reference the rest of the room organically.
 - `purchase_profile` — lifetime tallies of bar-salesman purchases (mining/salvage claims, ship PNGs, equipment) and station commodity-shop buys (mining/salvage/general/other). Signals player taste without narrating exact inventory.
 - `accessible_destinations` — stations the broker can target for `deliver_to_station` / `haul_goods` intents (0-1 jumpgate hops from this system, capped at 8, ranked by distance + same-faction-as-broker).
-- `regionally_known` — systems where the player has ≥ 3 recorded visits. Each entry includes `visits`, `last_visit_days_ago`, and an optional `recent_activity` archetype (filled only if the most-recent mission in that system is < 30 game-days old). Enables "you've been salvaging around here, yeah?" framing.
+- `regionally_known` — systems where the player has ≥ 3 recorded visits. Each entry includes `visits`, `last_visit_days_ago`, and an optional `recent_activity` — a list of objective tags from the most-recent mission in that system (same vocabulary as the journal's `objectives`), filled only if resolved < 30 game-days ago. Enables "you've been salvaging around here, yeah?" framing; empty/absent falls back to face-only recognition.
 - `location.station_condition` — single-word atmosphere tag (`war-torn` / `peaceful` / `bustling` / `frontier` / `normal`) that nudges the broker's linguistic register.
-- `story_arcs_active`, `waypoints`, `time`, `broker` (name, gender, seed, station alignment).
+- `waypoints`, `time`, `broker` (name, gender, seed, station alignment).
 
 Cargo contents, cargo %, credit balance, and hull/shield % are **not** included. A broker can't see into a private hold or wallet; mounted hardpoints ARE externally visible on a docked ship, so loadout flags stay.
 
-**2. Archetype pre-scoring.** `MissionGuidanceBuilder` weights five mission archetypes by signal aggregation *before* the LLM sees the context. The LLM reads our conclusion, not scattered raw signals.
+**2. Archetype pre-scoring.** `MissionGuidanceBuilder` weights six mission archetypes by signal aggregation *before* the LLM sees the context. The LLM reads our conclusion, not scattered raw signals. Mining and salvage stay distinct (different skill trees); trade is its own archetype for commodity hauling.
 
-| Archetype | Maps to | Signals |
+| Archetype | Maps to (intents) | Signals |
 |---|---|---|
-| `combat` | `ClearPoi` (preferred) or `KillEnemies` | hardpoints, spec Offense/Defense/Drones, combat titles, active bounty/patrol missions, damaged ship, hostile-neighbor system |
-| `gather` | `CollectItemTypes` Ore / RefinedProduct | hardpoints, spec Mining/Industrial/Engineering, miner title, industry ladder, active mining missions, Refinery+Forge facilities |
-| `salvage` | `CollectItemTypes` Salvage / Junk | hardpoints, spec Salvaging, active salvage missions, SalvageWorkshop facility |
-| `deliver` | `TriggerObjective` travel (± `CollectItemTypes` TradeGoods) | spec Economy/Engineering/Industrial, merchant title, full cargo, Shipyard, Economy story arc, varied connected systems |
-| `escort` | `ProtectUnit` + travel `TriggerObjective` | spec Defense/Leadership, hostile-neighbor system |
+| `combat` | `clear_combat_site`, defended gather variants | hardpoints, spec Offense/Defense/Drones, combat titles, active bounty/patrol missions, damaged ship, hostile-neighbor system |
+| `mining` | `gather_ore`, `defended_gather_ore` | hardpoints, spec Mining/Industrial/Engineering, miner title, industry ladder, active mining missions, Refinery+Forge facilities |
+| `salvage` | `gather_salvage`, `defended_gather_salvage` | hardpoints, spec Salvaging, active salvage missions, SalvageWorkshop facility |
+| `trade` | `haul_goods` | spec Economy/Industrial/Engineering, merchant/trader title, industry ladder, active industrial/trade story IDs, Refinery+Forge facilities |
+| `deliver` | `deliver_to_station` | spec Economy/Engineering/Industrial, merchant title, full cargo, Shipyard, varied connected systems |
+| `escort` | *(not yet a VGAnima intent — reserved)* | spec Defense/Leadership, hostile-neighbor system |
 
-Archetypes are forbidden (weight zeroed) when impossible: combat + escort are forbidden when no faction is hostile.
+Archetypes are forbidden (weight zeroed) when impossible: combat is forbidden when no faction is hostile; a forbidden archetype also blocks every intent whose archetype set touches it (e.g. forbidden combat blocks defended gather variants too).
 
 **3. LLM call.** `HttpLlmClient` POSTs to `<BaseUrl>/chat/completions` with a strict system prompt asking for a `vganima/mission/v2` JSON object: 3-5 pitch lines, 1-2 check-in lines, 2-4 payout lines, and a `mission` block (name, description, completion text, source faction, 1-3 steps each with an intent, 1-5 rewards). Intents are the v2 narrative vocabulary — `clear_combat_site`, `gather_ore`, `gather_salvage`, `defended_gather_ore`, `defended_gather_salvage`, `deliver_to_station`, `haul_goods`. The plugin maps each intent to the mechanical shape (POI spawn, objective type, ship composition) so the LLM authors narrative, not mechanics.
 
@@ -97,15 +100,16 @@ Any validation failure → no broker is injected, full system/user/raw-response 
 
 **6. Registration + rehydration.** `LlmMissionAssigner` registers the finished Mission into `StoryMission.allMissions` with a globally-unique storyId (`vganima_llm_<station-guid>_<broker-seed>_<nonce>`), and pushes a `PersistedEntry` into the in-memory `PersistedBrokerRegistry` (state=offered). The broker is then added to the bar roster.
 
-**7. Cross-session persistence.** Each vanilla save gets a pair-named sidecar `<save>.save.vganima.json` (schema **v3**) containing:
+**7. Cross-session persistence.** Each vanilla save gets a pair-named sidecar `<save>.save.vganima.json` (schema **v4**) containing:
 
 - **In-flight missions** — full LLM-authored mission blocks, broker dialogue trees, and broker→station bindings for all `offered` + `accepted` missions.
-- **Completed-mission journal** — rolling log (capped at 50 entries, FIFO) of resolved missions. Each record is a compact snapshot: broker name, station, faction, archetype, outcome, magnitude, resolution timestamp. Feeds the per-broker `journal` context windows.
 - **Visited-systems map** — `SystemMapData.guid` → (display name, visit count, first/last visit game-seconds). Written by the `TravelManager.JumpToSystem` Harmony prefix on every jumpgate arrival. Feeds `regionally_known`.
+
+Resolved-mission history lives in the sibling mod **VGMissionJournal** (its own sidecar). VGAnima used to keep a rolling 50-entry completed-mission log in-sidecar; that was retired in v4 because VGMissionJournal records *all* mission terminations (vanilla + VGAnima) in a richer, queryable form. See `MJ-T4` notes in the commit history.
 
 A Harmony postfix on `SaveGame.Store` flushes the in-memory registry to the sidecar after vanilla's own save succeeds; a prefix on `SaveGameFile.LoadSaveGame` reads the sidecar and registers rebuild factories *before* vanilla's mission-list deserialization runs. The `ApplicationQuit` safety net flushes pending state when the player closes the game mid-session. Orphan purge runs during the first post-load bar refresh, dropping entries whose storyIds left vanilla's mission lists or whose brokers left the bar.
 
-Schema upgrades are transparent: v2 sidecars (before the visited-systems addition) auto-upgrade to v3 on read — the `visited_systems` field reads as empty, gets populated from the next jumpgate arrival onward, and is written back as v3 on the next save. v1 sidecars (pre-intent-refactor, with deleted objective types) quarantine on load.
+Schema upgrades are transparent: v3 sidecars (before the local mission-log retirement) auto-upgrade to v4 on read — the `completed_missions` field is dropped; `entries` + `visited_systems` carry over intact; written back as v4 on the next save. v2 sidecars (before the visited-systems addition) upgrade through the same path. v1 sidecars (pre-intent-refactor, with deleted objective types) quarantine on load.
 
 Security: sidecars go through `VGAnimaSidecarSerializationBinder`, an allowlist over the concrete `LlmIntent` / `LlmReward` subtypes. Untrusted `$type` discriminators throw on deserialization. A missing or corrupted sidecar quarantines to `<save>.save.vganima.corrupt.<timestamp>.json` and the game continues with an empty registry — the `MissionLookupPatch` placeholder prevents `KeyNotFoundException` for any orphan storyIds vanilla's save still references.
 
@@ -138,7 +142,7 @@ Successful parses also emit the full prompt/response dump at Debug level so you 
 - **Boot log shows `LLM enabled: no`** — set `Llm.Enabled=true` AND `Llm.BaseUrl=...` in `vganima.cfg`. Both must be filled.
 - **Broker never appears** — check the boot log confirmed `LLM enabled: yes`, then watch for the LLM dispatch line: `Dispatching LLM for broker at '<station>'`. If that line is missing the probability roll failed (`MissionChance` < 1.0) or a vanilla NPC is hogging the seat budget (6 cap per bar). The dispatch log lists every gate that fired at Debug level.
 - **Broker spawns but mission has weird rewards** — check the Debug log for `Reward[Credits]: base_value=X missionLevel=Y → amount=Z` lines. Rewards are area-level-anchored; an over-leveled player at a low-level station will see XP near 1 (vanilla anti-farm at work, not a bug). See `docs/vanilla-reference.md` for the formulas.
-- **Every broker pitches combat (or gather, or...)** — check the `mission_guidance` block in the user prompt dump. The ranked weights show why a specific archetype was picked. Weights are derived from player signals; adjust your fleet loadout / specialization / titles if the skew is unexpected.
+- **Every broker pitches combat (or mining, or salvage, or...)** — check the `mission_guidance` block in the user prompt dump. The ranked weights show why a specific archetype was picked. Weights are derived from player signals; adjust your fleet loadout / specialization / titles if the skew is unexpected.
 - **Reload a save and the mission is gone** — check `BepInEx/LogOutput.log` for the load-time banner `Loaded N broker entries from <sidecar>`. If it says `No sidecar at <path>` or `Sidecar corrupted; quarantined to ...`, the paired file was missing/unreadable; affected missions auto-archive via `PlaceholderMission`. The sidecar should live alongside the vanilla save at `{persistentDataPath}/Saves/<saveName>.save.vganima.json`.
 - **Broker in bar but no mission dialogue after reload** — the sidecar entry may have been orphan-purged (storyId not in vanilla's active/archived list AND broker seed not in any current bar). Check the load log for `Orphan-purged N stale entries`. This typically happens after loading an older save slot that doesn't match the sidecar.
 - **Sidecar not updating on save** — confirm the log emits `Flushed N broker entries to <sidecar>` after each save. No log line = the Harmony postfix didn't run (check plugin load order).

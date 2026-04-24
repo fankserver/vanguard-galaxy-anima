@@ -1,7 +1,7 @@
 # Special-Quest Ideas
 
 Backlog of rare, high-flavor broker missions that sit outside the normal
-archetype pool (combat / gather / salvage / deliver / escort). Each entry
+archetype pool (combat / mining / salvage / trade / deliver / escort). Each entry
 has a small probability of firing per broker roll — think "once in a
 while, the broker pitches something weird that's memorable." The normal
 mission pool stays the default; these are the exceptions.
@@ -52,7 +52,7 @@ each variant has its own sub-weight in the table below.
 | 8 | **Crew Pod Hunt** | `CrewPod` drops (Leadership-gated, 0–25% per kill) | "Kill pirates in [system], grab whatever crew pods eject. I'll hire them off you, no questions." | rare (0.8 %) |
 | 9 | **Industrial Siege** | `IndustrialOutpost` defense waves | "Our supply station is about to get hit. Hold it through N waves and I unlock their production line as a personal trader for you." | rare (0.5 %) |
 
-### Specialized archetype variants — still combat/gather, but weird
+### Specialized archetype variants — still combat/mining/salvage, but weird
 
 | # | Name | Mechanic hook | Shape | Suggested rarity |
 |---|---|---|---|---|
@@ -87,7 +87,7 @@ if appears:
         LLM gets a VARIANT-SPECIFIC prompt (different system prompt,
         different reward scaling, different whitelists)
     else:
-        normal pool (combat / gather / salvage / deliver / escort)
+        normal pool (combat / mining / salvage / trade / deliver / escort)
 ```
 
 Each variant has its own prompt addendum + factory code path. Variants
