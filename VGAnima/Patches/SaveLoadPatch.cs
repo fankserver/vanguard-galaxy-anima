@@ -82,22 +82,15 @@ internal static class SaveLoadPatch
             {
                 case SidecarReadStatus.Loaded:
                     Registry.LoadFrom(result.Schema!.Entries);
-                    // Completed-missions field is nullable (additive v1
-                    // addition) — pre-journal sidecars deserialize with
-                    // null, which LoadCompletedMissions treats as "empty
-                    // log." Both shapes produce the same outcome.
-                    Registry.LoadCompletedMissions(result.Schema.CompletedMissions);
-                    // Visited-systems field is nullable (additive v3
-                    // addition). v2 sidecars upgrade in SidecarIO and
-                    // arrive here with null; LoadVisitedSystems treats
-                    // null as "empty map," so upgrade players start with
-                    // no regional recognition until they travel.
+                    // Visited-systems field is nullable. v3 sidecars had
+                    // it populated; v3→v4 upgrades only drop the
+                    // completed-missions field, so visited_systems
+                    // survives. Null on hand-edited / empty sidecars.
                     Registry.LoadVisitedSystems(result.Schema.VisitedSystems);
-                    var completedCount = result.Schema.CompletedMissions?.Length ?? 0;
-                    var visitedCount   = result.Schema.VisitedSystems?.Length   ?? 0;
+                    var visitedCount = result.Schema.VisitedSystems?.Length ?? 0;
                     Log?.LogInfo(
                         $"Loaded {result.Schema.Entries.Length} broker entr{(result.Schema.Entries.Length == 1 ? "y" : "ies")} + " +
-                        $"{completedCount} completed + {visitedCount} visited from {sidecarPath}");
+                        $"{visitedCount} visited from {sidecarPath}");
                     break;
                 case SidecarReadStatus.MissingFile:
                     Log?.LogInfo($"No sidecar at {sidecarPath} — starting with empty registry");

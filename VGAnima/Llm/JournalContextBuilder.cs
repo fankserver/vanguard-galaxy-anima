@@ -277,9 +277,11 @@ internal static class JournalContextBuilder
     {
         var block     = e.MissionBlock;
         var archetype = ArchetypeInferrer.Infer(block);
-        const int missionLevel = 10;
-        var magnitude = MagnitudeScorer.Score(
-            block, archetype, CompletedMissionOutcomes.Completed, missionLevel);
+        // Active-window magnitude is only a display signal — the reach
+        // formula doesn't gate in-flight entries (broker awareness of
+        // offered jobs is unconditional). 5 is a neutral mid-band
+        // value that doesn't skew the LLM's relative weighting.
+        const int magnitude = 5;
         return new LlmJournalEntry(
             StoryId:             e.StoryId,
             MissionName:         block.Name,

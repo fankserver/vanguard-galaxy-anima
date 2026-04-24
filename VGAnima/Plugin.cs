@@ -157,7 +157,6 @@ public class Plugin : BaseUnityPlugin
 
         MissionLookupPatch.Registry      = PersistedRegistry;
         MissionLifecyclePatches.Registry = PersistedRegistry;
-        MissionLifecyclePatches.Clock    = Clock;
 
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
@@ -197,15 +196,13 @@ public class Plugin : BaseUnityPlugin
         try
         {
             var sidecarPath = SidecarPathResolver.From(path);
-            var entries     = System.Linq.Enumerable.ToArray(PersistedRegistry.All());
-            var completed   = System.Linq.Enumerable.ToArray(PersistedRegistry.CompletedMissions);
-            var visited     = System.Linq.Enumerable.ToArray(PersistedRegistry.VisitedSystems.Values);
+            var entries = System.Linq.Enumerable.ToArray(PersistedRegistry.All());
+            var visited = System.Linq.Enumerable.ToArray(PersistedRegistry.VisitedSystems.Values);
             SidecarIO.Write(sidecarPath, new SidecarSchema(
-                Version:           SidecarSchema.CurrentVersion,
-                Entries:           entries,
-                CompletedMissions: completed.Length == 0 ? null : completed,
-                VisitedSystems:    visited.Length   == 0 ? null : visited));
-            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {completed.Length} completed + {visited.Length} visited to {sidecarPath}");
+                Version:        SidecarSchema.CurrentVersion,
+                Entries:        entries,
+                VisitedSystems: visited.Length == 0 ? null : visited));
+            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {visited.Length} visited to {sidecarPath}");
         }
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
     }

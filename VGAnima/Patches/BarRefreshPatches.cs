@@ -429,7 +429,7 @@ internal static class BarRefreshPatches
             {
                 regionallyKnown = RegionallyKnownBuilder.Build(
                     plugin.PersistedRegistry.VisitedSystems,
-                    plugin.PersistedRegistry.CompletedMissions,
+                    plugin.MissionJournalBridge,
                     currentGameSeconds: plugin.Clock.GameSeconds);
             }
             // Bar ecosystem — filter our own brokers out by seed so the

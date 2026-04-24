@@ -90,30 +90,30 @@ public class SidecarIOTests : IDisposable
         Assert.True(File.Exists(path));
     }
 
-    // The upgrade accepts existing v2 payloads (entries + completed
-    // missions) intact — the version bump is metadata-only.
+    // v3 → v4 upgrade is lossy: completed_missions was retired in MJ-T4
+    // when VGMissionJournal took over resolved-mission history. Reading
+    // a v3 sidecar must succeed, keep entries + visited_systems, and
+    // silently discard the completed_missions rows.
     [Fact]
-    public void Read_PreviousVersion_PreservesExistingFields()
+    public void Read_PreviousVersion_DropsCompletedMissionsButKeepsRest()
     {
-        var path = Path.Combine(_tempDir, "v2-populated.vganima.json");
+        var path = Path.Combine(_tempDir, "v3-populated.vganima.json");
         File.WriteAllText(path, $$"""
             {
               "version": {{SidecarSchema.CurrentVersion - 1}},
               "entries": [],
               "completed_missions": [{
                 "storyId": "vganima.llm.test",
-                "brokerName": "Test Broker",
-                "stationId": "station-x",
-                "stationName": "Testing Hub",
-                "sourceFaction": "TradingGuild",
                 "missionName": "Legacy Contract",
                 "archetype": "deliver",
-                "outcome": "completed",
-                "missionLevel": 7,
-                "systemName": "Zoran",
-                "magnitudeScore": 4,
-                "resolvedGameSeconds": 1234.5,
-                "resolvedRealUtc": "2026-04-21T10:00:00Z"
+                "outcome": "completed"
+              }],
+              "visited_systems": [{
+                "guid": "sys-zoran",
+                "name": "Zoran",
+                "visitCount": 4,
+                "firstVisitSeconds": 100.0,
+                "lastVisitSeconds":  500.0
               }]
             }
             """);
@@ -123,9 +123,9 @@ public class SidecarIOTests : IDisposable
 
         Assert.Equal(SidecarReadStatus.Loaded, result.Status);
         Assert.Equal(SidecarSchema.CurrentVersion, result.Schema!.Version);
-        Assert.NotNull(result.Schema.CompletedMissions);
-        Assert.Single(result.Schema.CompletedMissions!);
-        Assert.Equal("Legacy Contract", result.Schema.CompletedMissions![0].MissionName);
+        Assert.NotNull(result.Schema.VisitedSystems);
+        Assert.Single(result.Schema.VisitedSystems!);
+        Assert.Equal("Zoran", result.Schema.VisitedSystems![0].Name);
     }
 
     [Fact]
