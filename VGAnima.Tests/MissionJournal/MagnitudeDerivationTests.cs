@@ -110,30 +110,32 @@ public class MagnitudeDerivationTests
     }
 
     [Fact]
-    public void Derive_DefendedCollect_AddsDefendedBonus()
+    public void Derive_CombatPlusMining_NoLongerStacksDefendedBonus()
     {
-        // KillEnemies + Mining in the same mission → combat (+1) +
-        // defended-collect (+2) stacking. 10/2 = 5, +1, +2 = 8.
+        // KillEnemies + Mining in the same mission used to stack a +2
+        // "defended-collect" bonus. MJ-T4 removed that invented
+        // archetype — now it's just combat (+1) plus multi-step (+1).
+        // 10/2 = 5, +1 multi, +1 combat = 7.
         var r = MakeRecord(
             missionLevel: 10,
             subclass: "Mission",
             steps: Steps(
                 Step(Obj("KillEnemies")),
                 Step(Obj("Mining"))));
-        // Multi-step also adds +1. So: 5 + 1 (multi) + 1 (combat) + 2 (defended) = 9.
-        Assert.Equal(9, MagnitudeDerivation.Derive(r));
+        Assert.Equal(7, MagnitudeDerivation.Derive(r));
     }
 
     [Fact]
-    public void Derive_DefendedCollect_SalvageVariant()
+    public void Derive_ProtectUnitPlusSalvage_IsCombatShaped()
     {
-        // ProtectUnit + Salvage in one step → defended-collect shape.
+        // ProtectUnit is combat-shaped (keep-alive under fire), so the
+        // +1 combat bonus fires. No defended-collect stacking.
+        // 5 + 0 (single step) + 1 (combat) = 6.
         var r = MakeRecord(
             missionLevel: 10,
             subclass: "Mission",
             steps: Steps(Step(Obj("ProtectUnit"), Obj("Salvage"))));
-        // 5 + 0 (single step) + 1 (combat) + 2 (defended) = 8.
-        Assert.Equal(8, MagnitudeDerivation.Derive(r));
+        Assert.Equal(6, MagnitudeDerivation.Derive(r));
     }
 
     // ---- Outcome modifiers ----
@@ -175,7 +177,7 @@ public class MagnitudeDerivationTests
     [Fact]
     public void Derive_ClampsToCeilingTen_ForHighMagnitudeMissions()
     {
-        // Level 20 + multi-step + defended-collect = 10 + 1 + 1 + 2 = 14 → clamped 10.
+        // Level 20 + multi-step + combat = 10 + 1 + 1 = 12 → clamped 10.
         var r = MakeRecord(
             missionLevel: 20,
             subclass: "BountyMission",

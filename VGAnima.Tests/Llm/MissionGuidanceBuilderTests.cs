@@ -69,7 +69,7 @@ public class MissionGuidanceBuilderTests
     public void Build_TotalNoSignals_DistributesEvenlyAcrossNonForbidden()
     {
         // No hostile factions + no other signals. combat/escort forbidden,
-        // remaining three share evenly.
+        // remaining four (mining/salvage/trade/deliver) share evenly.
         var ctx = NewContext();
         ctx.Factions = new Dictionary<string, LlmFactionEntry>
         {
@@ -78,9 +78,10 @@ public class MissionGuidanceBuilderTests
         var g = MissionGuidanceBuilder.Build(ctx);
         Assert.Equal(0.0, Weight(g, "combat"));
         Assert.Equal(0.0, Weight(g, "escort"));
-        var expected = System.Math.Round(1.0 / 3.0, 2);
-        Assert.Equal(expected, Weight(g, "gather"));
+        var expected = System.Math.Round(1.0 / 4.0, 2);
+        Assert.Equal(expected, Weight(g, "mining"));
         Assert.Equal(expected, Weight(g, "salvage"));
+        Assert.Equal(expected, Weight(g, "trade"));
         Assert.Equal(expected, Weight(g, "deliver"));
     }
 
@@ -113,13 +114,13 @@ public class MissionGuidanceBuilderTests
     }
 
     [Fact]
-    public void Build_MiningLoadout_RanksGatherFirst()
+    public void Build_MiningLoadout_RanksMiningFirst()
     {
         var ctx = NewContext();
         ctx.Fleet.PrimaryShip = ctx.Fleet.PrimaryShip! with { HasMiningLoadout = true };
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        Assert.Equal("gather", g.ArchetypeWeights.First().Key);
+        Assert.Equal("mining", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
@@ -150,28 +151,28 @@ public class MissionGuidanceBuilderTests
     }
 
     [Fact]
-    public void Build_MiningSpec_RanksGatherFirst()
+    public void Build_MiningSpec_RanksMiningFirst()
     {
         var ctx = NewContext();
         ctx.Player.Specialization = "Mining";
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        Assert.Equal("gather", g.ArchetypeWeights.First().Key);
+        Assert.Equal("mining", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
-    public void Build_EngineeringSpec_LeansGatherAndDeliver()
+    public void Build_EngineeringSpec_LeansMiningAndTrade()
     {
-        // Engineering is a production-chain spec (crafting/producing items
-        // in-game). Same shape as Industrial: gather raw materials, deliver
-        // finished products.
+        // Engineering is a production-chain spec: mine raw ore, refine
+        // to finished commodities, ship out as trade goods. Same shape
+        // as Industrial.
         var ctx = NewContext();
         ctx.Player.Specialization = "Engineering";
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        Assert.True(Weight(g, "gather")  > 0.0);
-        Assert.True(Weight(g, "deliver") > 0.0);
-        Assert.Equal(0.0, Weight(g, "escort"));   // was wrongly set in an earlier draft
+        Assert.True(Weight(g, "mining") > 0.0);
+        Assert.True(Weight(g, "trade")  > 0.0);
+        Assert.Equal(0.0, Weight(g, "escort"));
     }
 
     [Fact]
@@ -212,13 +213,13 @@ public class MissionGuidanceBuilderTests
     }
 
     [Fact]
-    public void Build_MinerTitle_BoostsGather()
+    public void Build_MinerTitle_BoostsMining()
     {
         var ctx = NewContext();
         ctx.Player.UnlockedTitles = new[] { "miner" };
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        Assert.Equal("gather", g.ArchetypeWeights.First().Key);
+        Assert.Equal("mining", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
@@ -232,23 +233,23 @@ public class MissionGuidanceBuilderTests
     }
 
     [Fact]
-    public void Build_ActiveMiningMission_BoostsGather()
+    public void Build_ActiveMiningMission_BoostsMining()
     {
         var ctx = NewContext();
         ctx.Missions.ActiveStoryIds = new[] { "SkilltreeMissionMining2" };
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        Assert.Equal("gather", g.ArchetypeWeights.First().Key);
+        Assert.Equal("mining", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
-    public void Build_RefineryAndForge_BoostsGather()
+    public void Build_RefineryAndForge_BoostsMining()
     {
         var ctx = NewContext();
         ctx.Location.StationFacilities = new[] { "Bar", "Refinery", "Forge", "MissionBoard" };
         var g = MissionGuidanceBuilder.Build(ctx);
 
-        Assert.Equal("gather", g.ArchetypeWeights.First().Key);
+        Assert.Equal("mining", g.ArchetypeWeights.First().Key);
     }
 
     [Fact]
@@ -275,8 +276,8 @@ public class MissionGuidanceBuilderTests
         // escort got +1 each from the hostile-neighbor rule. Combat additionally
         // got +0.5 from the hostile-factions-exist rule. Combat should rank
         // above any archetype with zero signal.
-        Assert.True(Weight(g, "combat") > Weight(g, "gather"));
-        Assert.True(Weight(g, "escort") > Weight(g, "gather"));
+        Assert.True(Weight(g, "combat") > Weight(g, "mining"));
+        Assert.True(Weight(g, "escort") > Weight(g, "mining"));
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using VGMissionJournal.Logging;
 
 namespace VGAnima.MissionJournal;
@@ -5,26 +6,54 @@ namespace VGAnima.MissionJournal;
 /// <summary>Archetype inference for VGMissionJournal's
 /// <see cref="MissionRecord"/> — counterpart to
 /// <see cref="VGAnima.Missions.ArchetypeInferrer"/> which operates on
-/// VGAnima's own <c>LlmMissionBlock</c>.
+/// VGAnima's own <see cref="VGAnima.Llm.LlmMissionBlock"/> intents.
 ///
-/// <para>Combat/gather detection mirrors
-/// <see cref="MagnitudeDerivation"/>'s classifier; archetype adds
-/// salvage vs mining split, deliver/escort, and defended-collect
-/// stacking. Output strings are VGAnima's canonical
-/// <see cref="VGAnima.Persistence.MissionArchetypes"/> constants so the
-/// LLM context JSON looks identical whether a record originated in
-/// VGAnima or VGMissionJournal.</para></summary>
+/// <para>Priority ladder (first match wins). Economic identity
+/// (salvage / mining / trade) outranks role identity (escort /
+/// combat) because the broker's lasting memory of the player is "a
+/// salvager" before "a fighter who once salvaged." Drop-off travel is
+/// lowest — it's the connective tissue of multi-step missions, not a
+/// mission shape in itself.</para>
+///
+/// <para>Important subtlety: VGAnima's mission factory emits vanilla's
+/// <c>Mining</c>-class objective for both ore and salvage (and trade
+/// goods) missions, because that class has proper quantity semantics.
+/// VGAnima-authored salvage therefore arrives here as <c>Type="Mining"
+/// </c> with <c>itemCategory="Salvage"</c> in the Fields dictionary —
+/// so we can't trust the class name alone; we must peek at
+/// <c>itemCategory</c>. Vanilla's own salvage missions use the real
+/// <c>Salvage</c> class.</para></summary>
 internal static class MissionRecordArchetype
 {
+    // Objective type-name constants (case-sensitive ordinal per the
+    // VGMissionJournal API contract).
+    private const string TypeMining           = "Mining";
+    private const string TypeSalvage          = "Salvage";
+    private const string TypeCollectItemTypes = "CollectItemTypes";
+    private const string TypeKillEnemies      = "KillEnemies";
+    private const string TypeProtectUnit      = "ProtectUnit";
+    private const string TypeTravelToPOI      = "TravelToPOI";
+
+    // ItemCategory enum string values (read via Fields["itemCategory"]
+    // which camelCases the backing enum → ToString()).
+    private const string CatOre             = "Ore";
+    private const string CatSalvage         = "Salvage";
+    private const string CatRefinedProduct  = "RefinedProduct";
+    private const string CatTradeGoods      = "TradeGoods";
+
+    // Subclass fallbacks when the objective list is empty / inconclusive.
+    private const string SubclassBounty   = "BountyMission";
+    private const string SubclassPatrol   = "PatrolMission";
+    private const string SubclassIndustry = "IndustryMission";
+
     public static string Infer(MissionRecord record)
     {
-        var hasCombat   = record.MissionSubclass == "BountyMission"
-                       || record.MissionSubclass == "PatrolMission";
-        var hasMining   = false;
-        var hasSalvage  = false;
-        var hasCollect  = false;
-        var hasTravel   = false;
-        var hasEscort   = false;
+        var hasSalvage = false;
+        var hasMining  = false;
+        var hasTrade   = false;
+        var hasCombat  = false;
+        var hasEscort  = false;
+        var hasTravel  = false;
 
         if (record.Steps is not null)
         {
@@ -35,32 +64,74 @@ internal static class MissionRecordArchetype
                 {
                     switch (obj.Type)
                     {
-                        case "KillEnemies":  hasCombat  = true; break;
-                        case "ProtectUnit":  hasEscort  = true; hasCombat = true; break;
-                        case "Mining":       hasMining  = true; break;
-                        case "Salvage":      hasSalvage = true; break;
-                        case "CollectItemTypes": hasCollect = true; break;
-                        case "TravelToPOI":  hasTravel  = true; break;
+                        case TypeSalvage:
+                            hasSalvage = true;
+                            break;
+                        case TypeMining:
+                            ClassifyMining(obj.Fields,
+                                ref hasSalvage, ref hasMining, ref hasTrade);
+                            break;
+                        case TypeCollectItemTypes:
+                            hasTrade  = true;
+                            break;
+                        case TypeKillEnemies:
+                            hasCombat = true;
+                            break;
+                        case TypeProtectUnit:
+                            hasEscort = true;
+                            break;
+                        case TypeTravelToPOI:
+                            hasTravel = true;
+                            break;
                     }
                 }
             }
         }
 
-        var hasGather = hasMining || hasCollect;
+        if (hasSalvage) return Persistence.MissionArchetypes.Salvage;
+        if (hasMining)  return Persistence.MissionArchetypes.Mining;
+        if (hasTrade)   return Persistence.MissionArchetypes.Trade;
+        if (hasEscort)  return Persistence.MissionArchetypes.Escort;
+        if (hasCombat)  return Persistence.MissionArchetypes.Combat;
+        if (hasTravel)  return Persistence.MissionArchetypes.Deliver;
 
-        if (hasCombat && (hasSalvage || hasGather))
-            return Persistence.MissionArchetypes.DefendedCollect;
-        if (hasCombat && hasEscort)
-            return Persistence.MissionArchetypes.Escort;
-        if (hasCombat)
-            return Persistence.MissionArchetypes.Combat;
-        if (hasSalvage)
-            return Persistence.MissionArchetypes.Salvage;
-        if (hasMining)
-            return Persistence.MissionArchetypes.Gather;
-        if (hasCollect || hasTravel)
-            return Persistence.MissionArchetypes.Deliver;
-        return Persistence.MissionArchetypes.Other;
+        // Subclass fallback for missions with no classifying objectives
+        // (e.g. TriggerObjective-only missions like ClearAsteroidField).
+        return record.MissionSubclass switch
+        {
+            SubclassBounty   => Persistence.MissionArchetypes.Combat,
+            SubclassPatrol   => Persistence.MissionArchetypes.Combat,
+            SubclassIndustry => Persistence.MissionArchetypes.Mining,
+            _                => Persistence.MissionArchetypes.Other,
+        };
+    }
+
+    /// <summary>Mining-class objective disambiguator via
+    /// <c>itemCategory</c>. VGAnima's factory re-uses the Mining class
+    /// for salvage and trade missions too; without this field peek
+    /// every haul_goods / gather_salvage would misreport as mining.</summary>
+    private static void ClassifyMining(
+        IReadOnlyDictionary<string, object?>? fields,
+        ref bool hasSalvage, ref bool hasMining, ref bool hasTrade)
+    {
+        if (fields is null
+            || !fields.TryGetValue("itemCategory", out var catObj)
+            || catObj is not string cat)
+        {
+            // No category visible → default to mining (class name
+            // implies ore unless overridden).
+            hasMining = true;
+            return;
+        }
+
+        switch (cat)
+        {
+            case CatSalvage:        hasSalvage = true; break;
+            case CatOre:            hasMining  = true; break;
+            case CatTradeGoods:
+            case CatRefinedProduct: hasTrade   = true; break;
+            default:                hasMining  = true; break;
+        }
     }
 
     public static string OutcomeString(Outcome? outcome) => outcome switch
@@ -71,9 +142,6 @@ internal static class MissionRecordArchetype
         _                 => Persistence.CompletedMissionOutcomes.InProgress,
     };
 
-    /// <summary>Timestamp of the terminal timeline entry in game-seconds,
-    /// or 0 when the mission is still active. Used as the record's
-    /// "resolved_at" for the journal snapshot.</summary>
     public static double ResolvedGameSeconds(MissionRecord record) =>
         record.TerminalAtGameSeconds ?? 0.0;
 }

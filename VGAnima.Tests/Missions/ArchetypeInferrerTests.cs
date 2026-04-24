@@ -27,10 +27,10 @@ public class ArchetypeInferrerTests
     }
 
     [Fact]
-    public void GatherOre_Alone_IsGather()
+    public void GatherOre_Alone_IsMining()
     {
         var b = Block(new GatherOreIntent(10, "desc"));
-        Assert.Equal(MissionArchetypes.Gather, ArchetypeInferrer.Infer(b));
+        Assert.Equal(MissionArchetypes.Mining, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
@@ -41,39 +41,50 @@ public class ArchetypeInferrerTests
     }
 
     [Fact]
-    public void DefendedGatherSalvage_IsDefendedCollect()
+    public void DefendedGatherSalvage_IsSalvage()
     {
-        // Single-step defended gather: the intent itself is the hybrid
-        // shape, no separate combat step needed.
+        // Economic identity wins: the player's narrative self is a
+        // salvager who also fought defenders, not a fighter who
+        // happened to salvage.
         var b = Block(new DefendedGatherSalvageIntent(10, "Marauders", "desc"));
-        Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
+        Assert.Equal(MissionArchetypes.Salvage, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void DefendedGatherOre_IsDefendedCollect()
+    public void DefendedGatherOre_IsMining()
     {
         var b = Block(new DefendedGatherOreIntent(10, "Marauders", "desc"));
-        Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
+        Assert.Equal(MissionArchetypes.Mining, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void MultiStep_CombatThenSalvage_IsDefendedCollect()
+    public void MultiStep_CombatThenSalvage_IsSalvage()
     {
-        // Cross-step combat + gather should also collapse to the hybrid
-        // tag — journal queries asking for combat OR salvage history match.
+        // Cross-step combat + salvage → salvage (economic identity).
+        // The combat step is framing, the salvage is the deliverable.
         var b = Block(
             new ClearCombatSiteIntent("Marauders", "clear"),
             new GatherSalvageIntent(10, "collect"));
-        Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
+        Assert.Equal(MissionArchetypes.Salvage, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
-    public void MultiStep_CombatThenOre_IsDefendedCollect()
+    public void MultiStep_CombatThenOre_IsMining()
     {
         var b = Block(
             new ClearCombatSiteIntent("Marauders", "clear"),
             new GatherOreIntent(10, "collect"));
-        Assert.Equal(MissionArchetypes.DefendedCollect, ArchetypeInferrer.Infer(b));
+        Assert.Equal(MissionArchetypes.Mining, ArchetypeInferrer.Infer(b));
+    }
+
+    [Fact]
+    public void HaulGoods_Alone_IsTrade()
+    {
+        // Commodity turn-in (Mining objective with TradeGoods category +
+        // TravelToPOI) = trade, not deliver. The player hauled goods
+        // between markets, they didn't just dock somewhere.
+        var b = Block(new HaulGoodsIntent(10, "dest_0", "d"));
+        Assert.Equal(MissionArchetypes.Trade, ArchetypeInferrer.Infer(b));
     }
 
     [Fact]
@@ -84,19 +95,8 @@ public class ArchetypeInferrerTests
     }
 
     [Fact]
-    public void HaulGoods_Alone_IsDeliver()
-    {
-        // HaulGoods is a composite (gather trade goods + deliver), but the
-        // resolved archetype is Deliver since there's no Ore/Salvage POI.
-        var b = Block(new HaulGoodsIntent(10, "dest_0", "d"));
-        Assert.Equal(MissionArchetypes.Deliver, ArchetypeInferrer.Infer(b));
-    }
-
-    [Fact]
     public void EmptyBlock_IsOther()
     {
-        // Degenerate fallback — should never happen in production (validator
-        // requires >=1 step) but the inferrer handles it gracefully.
         var b = new LlmMissionBlock(
             Name: "Empty", Description: "x", CompletionText: "x",
             SourceFaction: "SalvageGuild",

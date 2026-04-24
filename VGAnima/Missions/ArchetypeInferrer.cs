@@ -3,57 +3,66 @@ using VGAnima.Persistence;
 
 namespace VGAnima.Missions;
 
-/// <summary>Derives a coarse archetype string from an
-/// <see cref="LlmMissionBlock"/>'s intent mix. Pure function — no game
-/// state, no factory side effects. Used at mission-resolution time by
-/// <c>MissionLifecyclePatches</c> to tag a
-/// <see cref="CompletedMissionRecord"/> so the journal context builder
-/// can filter by archetype later ("last 3 salvage jobs at this station").
+/// <summary>Derives a canonical archetype string from an
+/// <see cref="LlmMissionBlock"/>'s intent mix. Pure function; mirrors
+/// <see cref="VGAnima.MissionJournal.MissionRecordArchetype"/> which
+/// does the same job against VGMissionJournal's observed records, so
+/// an in-flight VGAnima offer and its resolved VGMissionJournal twin
+/// surface the same archetype to the LLM.
 ///
-/// <para>Labels come from <see cref="MissionArchetypes"/>. Since v2 intents
-/// are type-safe the mapping is a simple per-type switch — compare to v1
-/// which had to reason across objective combinations. Mixed multi-step
-/// missions collapse to the "heaviest" archetype present (priority order:
-/// defended-collect > combat > salvage > gather > deliver).</para></summary>
+/// <para>Priority ladder (first match wins). Economic identity
+/// outranks role identity — a broker remembers the player as "a
+/// salvager who also fought" before "a fighter who salvaged":
+/// <list type="number">
+///   <item><c>salvage</c> — any GatherSalvage / DefendedGatherSalvage
+///     intent.</item>
+///   <item><c>mining</c> — any GatherOre / DefendedGatherOre intent.</item>
+///   <item><c>trade</c> — HaulGoods (commodity turn-in shape).</item>
+///   <item><c>combat</c> — ClearCombatSite without any economic
+///     intent above.</item>
+///   <item><c>deliver</c> — DeliverToStation without any qualifying
+///     intent above.</item>
+///   <item><c>other</c> — unknown intent mix.</item>
+/// </list>
+/// Note: VGAnima's LLM whitelist has no ProtectUnit intent, so
+/// <c>escort</c> never applies here — it only surfaces through
+/// <see cref="VGAnima.MissionJournal.MissionRecordArchetype"/> for
+/// vanilla Escort / HelpMiner missions observed via
+/// VGMissionJournal.</para></summary>
 internal static class ArchetypeInferrer
 {
     public static string Infer(LlmMissionBlock block)
     {
-        // Accumulate flags across all steps so multi-step missions pick
-        // up every present archetype, then collapse via priority below.
-        var hasCombat          = false;
-        var hasOre             = false;
-        var hasSalvage         = false;
-        var hasDefendedOre     = false;
-        var hasDefendedSalvage = false;
-        var hasDeliver         = false;
-        var hasHaul            = false;
+        var hasSalvage  = false;
+        var hasMining   = false;
+        var hasTrade    = false;
+        var hasCombat   = false;
+        var hasDeliver  = false;
 
         foreach (var step in block.Steps)
         {
             switch (step.Intent)
             {
-                case ClearCombatSiteIntent:       hasCombat          = true; break;
-                case GatherOreIntent:             hasOre             = true; break;
-                case GatherSalvageIntent:         hasSalvage         = true; break;
-                case DefendedGatherOreIntent:     hasDefendedOre     = true; break;
-                case DefendedGatherSalvageIntent: hasDefendedSalvage = true; break;
-                case DeliverToStationIntent:      hasDeliver         = true; break;
-                case HaulGoodsIntent:             hasHaul            = true; break;
+                case GatherSalvageIntent:
+                case DefendedGatherSalvageIntent:
+                    hasSalvage = true; break;
+                case GatherOreIntent:
+                case DefendedGatherOreIntent:
+                    hasMining  = true; break;
+                case HaulGoodsIntent:
+                    hasTrade   = true; break;
+                case ClearCombatSiteIntent:
+                    hasCombat  = true; break;
+                case DeliverToStationIntent:
+                    hasDeliver = true; break;
             }
         }
 
-        // Defended variants are the hybrid combat+gather shape — tag them
-        // accordingly so journal queries that ask for combat OR salvage
-        // history still match. Cross-step combat+gather also counts as
-        // defended-collect.
-        if (hasDefendedOre || hasDefendedSalvage)             return MissionArchetypes.DefendedCollect;
-        if (hasCombat && (hasOre || hasSalvage))              return MissionArchetypes.DefendedCollect;
-
-        if (hasCombat)                                        return MissionArchetypes.Combat;
-        if (hasSalvage)                                       return MissionArchetypes.Salvage;
-        if (hasOre)                                           return MissionArchetypes.Gather;
-        if (hasHaul || hasDeliver)                            return MissionArchetypes.Deliver;
+        if (hasSalvage) return MissionArchetypes.Salvage;
+        if (hasMining)  return MissionArchetypes.Mining;
+        if (hasTrade)   return MissionArchetypes.Trade;
+        if (hasCombat)  return MissionArchetypes.Combat;
+        if (hasDeliver) return MissionArchetypes.Deliver;
         return MissionArchetypes.Other;
     }
 }

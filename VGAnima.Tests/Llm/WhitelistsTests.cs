@@ -85,13 +85,13 @@ public class WhitelistsTests
     [Theory]
     // Simple archetype intents — single entry.
     [InlineData("clear_combat_site", new[] { "combat" })]
-    [InlineData("gather_ore",        new[] { "gather" })]
+    [InlineData("gather_ore",        new[] { "mining" })]
     [InlineData("gather_salvage",    new[] { "salvage" })]
     [InlineData("deliver_to_station", new[] { "deliver" })]
     // Composite — forbidding EITHER archetype must block the intent.
-    [InlineData("defended_gather_ore",     new[] { "combat", "gather" })]
+    [InlineData("defended_gather_ore",     new[] { "combat", "mining" })]
     [InlineData("defended_gather_salvage", new[] { "combat", "salvage" })]
-    [InlineData("haul_goods",              new[] { "deliver" })]
+    [InlineData("haul_goods",              new[] { "trade" })]
     public void IntentWhitelist_Archetypes_Correct(string intent, string[] expected)
     {
         var archetypes = IntentWhitelist.Archetypes(intent);

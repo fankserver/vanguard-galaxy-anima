@@ -849,7 +849,7 @@ internal static class BarRefreshPatches
             "    \"required_amount\": 1..20,\n" +
             "    \"destination_id\":  <dest_N from context.accessible_destinations>,\n" +
             $"    \"description\":     <<={MissionBlockValidator.ObjDescriptionSoftMaxLen} chars> }}\n" +
-            "      Plugin emits CollectItemTypes(TradeGoods) + TravelToPOI in\n" +
+            "      Plugin emits Mining(TradeGoods quantity) + TravelToPOI in\n" +
             "      one step — both must complete: have the goods AND dock at\n" +
             "      the destination.\n\n" +
             "REWARD TYPES:\n" +
@@ -878,10 +878,10 @@ internal static class BarRefreshPatches
             "  facilities, ship hardpoint loadout, and faction state. Top-ranked archetype\n" +
             "  is the default pick. Intent -> archetype mapping:\n" +
             "    * clear_combat_site -> combat\n" +
-            "    * gather_ore / defended_gather_ore -> gather (defended also = combat)\n" +
+            "    * gather_ore / defended_gather_ore -> mining (defended also = combat)\n" +
             "    * gather_salvage / defended_gather_salvage -> salvage (defended also = combat)\n" +
             "    * deliver_to_station -> deliver\n" +
-            "    * haul_goods -> deliver\n" +
+            "    * haul_goods -> trade\n" +
             "  The validator mechanically rejects intents whose archetypes appear in\n" +
             "  mission_guidance.forbidden_archetypes. When combat is forbidden, ALSO keep\n" +
             "  the DIALOGUE non-combat — no defenders, raiders, or ambushes in the lines\n" +

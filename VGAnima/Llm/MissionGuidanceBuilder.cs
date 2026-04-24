@@ -16,17 +16,20 @@ namespace VGAnima.Llm;
 /// Signal strengths (weights): VeryStrong=3, Strong=2, Medium=1, Weak=0.5.
 /// Values hardcoded; tune via source edit + rebuild.
 ///
-/// Archetype set (exactly five; map to objective types in the prompt):
+/// Archetype set (aligned with vanilla's real objective vocabulary;
+/// see <see cref="VGAnima.Persistence.MissionArchetypes"/>):
 ///   combat  → ClearPoi (preferred) or KillEnemies
-///   gather  → CollectItemTypes (Ore / RefinedProduct)
-///   salvage → CollectItemTypes (Salvage)
-///   deliver → TriggerObjective (travel) or CollectItemTypes (TradeGoods)
-///   escort  → ProtectUnit + TriggerObjective travel</summary>
+///   mining  → gather_ore intents (ore from asteroid fields)
+///   salvage → gather_salvage intents (salvage from derelict wrecks)
+///   trade   → haul_goods (commodity turn-in)
+///   deliver → deliver_to_station (courier-style drop-off)
+///   escort  → reserved; no VGAnima intent emits ProtectUnit today</summary>
 internal static class MissionGuidanceBuilder
 {
     public const string Combat  = "combat";
-    public const string Gather  = "gather";
+    public const string Mining  = "mining";
     public const string Salvage = "salvage";
+    public const string Trade   = "trade";
     public const string Deliver = "deliver";
     public const string Escort  = "escort";
 
@@ -40,8 +43,9 @@ internal static class MissionGuidanceBuilder
         var raw = new Dictionary<string, double>
         {
             [Combat]  = 0.0,
-            [Gather]  = 0.0,
+            [Mining]  = 0.0,
             [Salvage] = 0.0,
+            [Trade]   = 0.0,
             [Deliver] = 0.0,
             [Escort]  = 0.0,
         };
@@ -95,8 +99,8 @@ internal static class MissionGuidanceBuilder
         }
         if (ship.HasMiningLoadout)
         {
-            raw[Gather] += VeryStrong;
-            rationale.Add("primary ship has mining hardpoints mounted → gather");
+            raw[Mining] += VeryStrong;
+            rationale.Add("primary ship has mining hardpoints mounted → mining");
         }
         if (ship.HasSalvageLoadout)
         {
@@ -111,8 +115,8 @@ internal static class MissionGuidanceBuilder
         switch (spec)
         {
             case "Mining":
-                raw[Gather] += Strong;
-                rationale.Add("specialization=Mining → gather");
+                raw[Mining] += Strong;
+                rationale.Add("specialization=Mining → mining");
                 break;
             case "Salvaging":
                 raw[Salvage] += Strong;
@@ -129,21 +133,20 @@ internal static class MissionGuidanceBuilder
                 rationale.Add("specialization=Defense → escort (strong) / combat (medium)");
                 break;
             case "Industrial":
-                raw[Gather]  += Medium;
-                raw[Deliver] += Medium;
-                rationale.Add("specialization=Industrial → gather + deliver");
+                // Mines raw + ships commodities — production-chain spec.
+                raw[Mining] += Medium;
+                raw[Trade]  += Medium;
+                rationale.Add("specialization=Industrial → mining + trade");
                 break;
             case "Economy":
-                raw[Deliver] += Strong;
-                rationale.Add("specialization=Economy → deliver");
+                raw[Trade] += Strong;
+                rationale.Add("specialization=Economy → trade");
                 break;
             case "Engineering":
-                // Crafting / production role — gathers raw materials to refine
-                // into finished goods, then ships the output. Same archetype
-                // shape as Industrial (both are production-chain specs).
-                raw[Gather]  += Medium;
-                raw[Deliver] += Medium;
-                rationale.Add("specialization=Engineering → gather + deliver (production chain)");
+                // Crafting / production — same production-chain shape as Industrial.
+                raw[Mining] += Medium;
+                raw[Trade]  += Medium;
+                rationale.Add("specialization=Engineering → mining + trade (production chain)");
                 break;
             case "Leadership":
                 // Captain-class generalist — fleet command leans toward combat
@@ -169,13 +172,13 @@ internal static class MissionGuidanceBuilder
                     rationale.Add($"title {title} → combat");
                     break;
                 case "miner":
-                    raw[Gather] += Strong;
-                    rationale.Add("title miner → gather");
+                    raw[Mining] += Strong;
+                    rationale.Add("title miner → mining");
                     break;
                 case "merchant":
                 case "trader":
-                    raw[Deliver] += Strong;
-                    rationale.Add($"title {title} → deliver");
+                    raw[Trade] += Strong;
+                    rationale.Add($"title {title} → trade");
                     break;
                 // Unknown titles: no signal. Easy to extend later.
             }
@@ -198,9 +201,11 @@ internal static class MissionGuidanceBuilder
         }
         if (p.IndustryRank > 0)
         {
-            raw[Gather]  += Medium;
-            raw[Deliver] += Medium;
-            rationale.Add($"industry_rank={p.IndustryRank} → gather + deliver");
+            // Industry ladder mixes mining, refining, and commodity
+            // trade — reward both economic lanes.
+            raw[Mining] += Medium;
+            raw[Trade]  += Medium;
+            rationale.Add($"industry_rank={p.IndustryRank} → mining + trade");
         }
         if (p.MaxBountyLevel > 0 && p.BountyRank == 0)
         {
@@ -221,15 +226,22 @@ internal static class MissionGuidanceBuilder
                 raw[Combat] += Strong;
                 rationale.Add($"active mission {id} → combat");
             }
-            else if (lower.Contains("mining") || lower.Contains("industrial"))
+            else if (lower.Contains("mining"))
             {
-                raw[Gather] += Strong;
-                rationale.Add($"active mission {id} → gather");
+                raw[Mining] += Strong;
+                rationale.Add($"active mission {id} → mining");
             }
             else if (lower.Contains("salvage"))
             {
                 raw[Salvage] += Strong;
                 rationale.Add($"active mission {id} → salvage");
+            }
+            else if (lower.Contains("industrial") || lower.Contains("trade"))
+            {
+                // Industrial/trade storyIds are commodity missions, not
+                // mining itself. Map to trade for correct guidance.
+                raw[Trade] += Strong;
+                rationale.Add($"active mission {id} → trade");
             }
         }
     }
@@ -241,8 +253,12 @@ internal static class MissionGuidanceBuilder
         var set = new HashSet<string>(facilities);
         if (set.Contains("Refinery") && set.Contains("Forge"))
         {
-            raw[Gather] += Strong;
-            rationale.Add("station facilities Refinery+Forge → gather");
+            // Refinery processes ore; Forge refines products. A station
+            // with both is a commodity-processing hub — miners drop raw,
+            // traders pick up refined. Reward both lanes.
+            raw[Mining] += Medium;
+            raw[Trade]  += Medium;
+            rationale.Add("station facilities Refinery+Forge → mining + trade");
         }
         if (set.Contains("SalvageWorkshop"))
         {

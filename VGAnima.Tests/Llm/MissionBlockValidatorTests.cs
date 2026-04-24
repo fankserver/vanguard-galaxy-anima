@@ -458,14 +458,11 @@ public class MissionBlockValidatorTests
     }
 
     [Fact]
-    public void Parse_GatherForbidden_AllowsHaulGoods()
+    public void Parse_MiningForbidden_AllowsHaulGoods()
     {
-        // haul_goods is a courier pitch — trade goods the broker hands
-        // over for delivery, NOT ore mining. Mapped to `deliver` only
-        // (2026-04-23 narrative-honesty refactor), so a `gather`
-        // forbidden entry must NOT block it. Previously the mapping
-        // was composite (gather+deliver) which gave haul_goods an
-        // unearned coupling to the mining archetype.
+        // haul_goods is commodity turn-in (trade), NOT ore mining from
+        // asteroids — the two archetypes share no signals. Mining-
+        // forbidden must not block a trade intent.
         var m = ValidMission(steps: new JArray(new JObject
         {
             ["intent"]          = "haul_goods",
@@ -473,17 +470,16 @@ public class MissionBlockValidatorTests
             ["destination_id"]  = "dest_0",
             ["description"]     = "d",
         }));
-        // Should parse without throwing.
         Validator().Parse(m, Hostiles, Rep,
-            forbiddenArchetypes: new[] { "gather" },
+            forbiddenArchetypes: new[] { "mining" },
             accessibleDestinations: Destinations);
     }
 
     [Fact]
-    public void Parse_DeliverForbidden_BlocksHaulGoods()
+    public void Parse_TradeForbidden_BlocksHaulGoods()
     {
-        // haul_goods now maps to `deliver` only, so deliver-forbidden
-        // is the ONE forbidden-archetype gate that can still block it.
+        // haul_goods maps to `trade`, so trade-forbidden is the
+        // archetype gate that blocks it.
         var m = ValidMission(steps: new JArray(new JObject
         {
             ["intent"]          = "haul_goods",
@@ -493,7 +489,7 @@ public class MissionBlockValidatorTests
         }));
         Assert.Throws<LlmValidationException>(
             () => Validator().Parse(m, Hostiles, Rep,
-                forbiddenArchetypes: new[] { "deliver" },
+                forbiddenArchetypes: new[] { "trade" },
                 accessibleDestinations: Destinations));
     }
 

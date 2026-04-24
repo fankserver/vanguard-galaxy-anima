@@ -53,20 +53,18 @@ internal static class IntentWhitelist
     public static IReadOnlyList<string> Archetypes(string intent) => intent switch
     {
         ClearCombatSite       => new[] { "combat" },
-        GatherOre             => new[] { "gather" },
+        GatherOre             => new[] { "mining" },
         GatherSalvage         => new[] { "salvage" },
         // Composite: both archetypes apply. A defended-ore intent is
-        // blocked if either `combat` OR `gather` is in forbidden_archetypes.
-        DefendedGatherOre     => new[] { "combat", "gather" },
+        // blocked if EITHER `combat` OR `mining` is in forbidden_archetypes.
+        DefendedGatherOre     => new[] { "combat", "mining" },
         DefendedGatherSalvage => new[] { "combat", "salvage" },
         DeliverToStation      => new[] { "deliver" },
-        // haul = pick up trade goods the broker provides, deliver to the
-        // destination. The "gather" step is a mission-given pickup, not
-        // ore mining — it shares no signals with the gather archetype
-        // (no asteroid fields, no mining loadout relevance). Map to
-        // deliver only; previously lumped "gather + deliver" gave
-        // haul_goods an unearned boost when mining signals were strong.
-        HaulGoods             => new[] { "deliver" },
+        // haul_goods = turn in N items of a commodity category — trade,
+        // not delivery. Previously misclassified as "deliver" alone;
+        // corrected to `trade` so MissionGuidanceBuilder weights the
+        // intent against the right signals.
+        HaulGoods             => new[] { "trade" },
         _                     => System.Array.Empty<string>(),
     };
 }

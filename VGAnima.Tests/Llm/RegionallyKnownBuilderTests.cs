@@ -66,7 +66,7 @@ public class RegionallyKnownBuilderTests
         {
             case "combat":  subclass = "BountyMission"; break;
             case "salvage": objectives.Add(new("Salvage", null)); break;
-            case "gather":  objectives.Add(new("Mining",  null)); break;
+            case "mining":  objectives.Add(new("Mining",  null)); break;
         }
         var steps = objectives.Count == 0
             ? new List<MissionStepDefinition>()
@@ -241,7 +241,7 @@ public class RegionallyKnownBuilderTests
         var result = RegionallyKnownBuilder.Build(
             visited,
             BridgeWith(
-                MakeRec("sys-a", "gather", terminalAtGameSeconds: OneDay),
+                MakeRec("sys-a", "mining", terminalAtGameSeconds: OneDay),
                 MakeRec("sys-b", "combat", terminalAtGameSeconds: OneDay)),
             currentGameSeconds: TwoDays);
         Assert.NotNull(result);
