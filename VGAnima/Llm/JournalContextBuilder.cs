@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using VGAnima.MissionJournal;
-using VGAnima.Missions;
 using VGAnima.Persistence;
 using VGMissionJournal.Logging;
 
@@ -254,7 +253,7 @@ internal static class JournalContextBuilder
         new(
             StoryId:             DedupKey(r),
             MissionName:         r.MissionName ?? "",
-            Archetype:           MissionRecordArchetype.Infer(r),
+            Objectives:          MissionRecordArchetype.ObjectiveTags(r),
             Outcome:             MissionRecordArchetype.OutcomeString(r.Outcome),
             SourceFaction:       r.SourceFaction ?? "",
             StationName:         r.SourceStationName ?? "",
@@ -275,8 +274,8 @@ internal static class JournalContextBuilder
 
     private static LlmJournalEntry InFlightSnapshot(PersistedEntry e)
     {
-        var block     = e.MissionBlock;
-        var archetype = ArchetypeInferrer.Infer(block);
+        var block      = e.MissionBlock;
+        var objectives = InFlightObjectives(block);
         // Active-window magnitude is only a display signal — the reach
         // formula doesn't gate in-flight entries (broker awareness of
         // offered jobs is unconditional). 5 is a neutral mid-band
@@ -285,7 +284,7 @@ internal static class JournalContextBuilder
         return new LlmJournalEntry(
             StoryId:             e.StoryId,
             MissionName:         block.Name,
-            Archetype:           archetype,
+            Objectives:          objectives,
             Outcome:             CompletedMissionOutcomes.InProgress,
             SourceFaction:       block.SourceFaction,
             StationName:         e.Broker.StationNameSnapshot ?? "a station",
@@ -293,5 +292,48 @@ internal static class JournalContextBuilder
             ResolvedGameSeconds: e.Timestamps.CreatedGameSeconds,
             Magnitude:           magnitude,
             JumpsFromHere:       0);
+    }
+
+    /// <summary>Map a pitched LlmMissionBlock's intents to the same
+    /// objective-tag vocabulary <see cref="MissionRecordArchetype.ObjectiveTags"/>
+    /// emits for historical records. Keeps the shape identical across
+    /// resolved and in-flight journal entries so the LLM reads one rule.</summary>
+    private static IReadOnlyList<string> InFlightObjectives(LlmMissionBlock block)
+    {
+        var tags = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var step in block.Steps)
+        {
+            switch (step.Intent)
+            {
+                case ClearCombatSiteIntent:
+                    tags.Add(MissionRecordArchetype.TagKillEnemies);
+                    break;
+                case GatherOreIntent:
+                    tags.Add(MissionRecordArchetype.TagMineOre);
+                    break;
+                case GatherSalvageIntent:
+                    tags.Add(MissionRecordArchetype.TagCollectSalvage);
+                    break;
+                case DefendedGatherOreIntent:
+                    tags.Add(MissionRecordArchetype.TagKillEnemies);
+                    tags.Add(MissionRecordArchetype.TagMineOre);
+                    break;
+                case DefendedGatherSalvageIntent:
+                    tags.Add(MissionRecordArchetype.TagKillEnemies);
+                    tags.Add(MissionRecordArchetype.TagCollectSalvage);
+                    break;
+                case HaulGoodsIntent:
+                    tags.Add(MissionRecordArchetype.TagHaulGoods);
+                    break;
+                case DeliverToStationIntent:
+                    tags.Add(MissionRecordArchetype.TagTravel);
+                    break;
+            }
+        }
+        if (tags.Count == 0) return Array.Empty<string>();
+        var arr = new string[tags.Count];
+        tags.CopyTo(arr);
+        Array.Sort(arr, StringComparer.Ordinal);
+        return arr;
     }
 }

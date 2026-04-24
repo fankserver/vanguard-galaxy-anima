@@ -940,13 +940,21 @@ internal static class BarRefreshPatches
             "  duplicates an `active` entry on intent + faction + site. You MAY\n" +
             "  reference journal entries in dialogue, matched to the window's\n" +
             "  fidelity (local = direct, network = faction-channel, rumors = hearsay).\n" +
+            "  Each entry carries an `objectives` array with canonical tags\n" +
+            "  (kill_enemies / protect_unit / mine_ore / collect_salvage /\n" +
+            "  haul_goods / collect_items / travel) drawn from the mission's\n" +
+            "  actual objectives. Empty array = subclass-only mission; read the\n" +
+            "  mission_name. Multiple tags = mixed shape (e.g. a defended salvage\n" +
+            "  run surfaces as [collect_salvage, kill_enemies]).\n" +
             "- REGIONAL RECOGNITION — context.regionally_known (if present) lists\n" +
             "  systems where the player has been a regular. If this station's system\n" +
             "  appears in the list, the broker MAY casually acknowledge recognizing\n" +
             "  the player. Two framings:\n" +
-            "    * recent_activity filled (e.g. \"salvage\") -> reference the pattern:\n" +
-            "      \"you've been salvaging around here, yeah?\"\n" +
-            "    * recent_activity null -> face-only: \"I've seen you through here\n" +
+            "    * recent_activity filled (array of objective tags, e.g.\n" +
+            "      [\"collect_salvage\"] or [\"collect_salvage\", \"kill_enemies\"]) ->\n" +
+            "      reference the pattern: \"you've been salvaging around here, yeah?\"\n" +
+            "      Multiple tags = mixed activity; pick the one that fits the pitch.\n" +
+            "    * recent_activity absent -> face-only: \"I've seen you through here\n" +
             "      a few times.\"\n" +
             "  DO NOT invent specific prior events from this field — the journal is\n" +
             "  the source of truth for specific deeds. Regional recognition is about\n" +

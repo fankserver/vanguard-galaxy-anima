@@ -56,7 +56,9 @@ public class RegionallyKnownBuilderTests
 
     /// <summary>Build a resolved MissionRecord whose subclass/objectives
     /// map to <paramref name="archetypeHint"/> via MissionRecordArchetype
-    /// — that's what the builder calls to derive recent_activity.</summary>
+    /// — that's what the builder calls to derive recent_activity.
+    /// Objective types mirror what vanilla's own missions emit (BountyHunt
+    /// → KillEnemies, SalvageWreck → Salvage, MineOre → Mining).</summary>
     private static MissionRecord MakeRec(
         string systemId, string archetypeHint, double terminalAtGameSeconds)
     {
@@ -64,7 +66,10 @@ public class RegionallyKnownBuilderTests
         var objectives = new List<MissionObjectiveDefinition>();
         switch (archetypeHint)
         {
-            case "combat":  subclass = "BountyMission"; break;
+            case "combat":
+                subclass = "BountyMission";
+                objectives.Add(new("KillEnemies", null));
+                break;
             case "salvage": objectives.Add(new("Salvage", null)); break;
             case "mining":  objectives.Add(new("Mining",  null)); break;
         }
@@ -153,7 +158,8 @@ public class RegionallyKnownBuilderTests
             BridgeWith(MakeRec("sys-a", "salvage", terminalAtGameSeconds: OneDay * 5)),
             currentGameSeconds: OneDay * 10);
         Assert.NotNull(result);
-        Assert.Equal("salvage", result![0].RecentActivity);
+        Assert.NotNull(result![0].RecentActivity);
+        Assert.Equal(new[] { "collect_salvage" }, result[0].RecentActivity);
     }
 
     [Fact]
@@ -177,7 +183,7 @@ public class RegionallyKnownBuilderTests
     }
 
     [Fact]
-    public void Build_MultipleMissionsInSystem_PicksMostRecentArchetype()
+    public void Build_MultipleMissionsInSystem_PicksMostRecentObjectives()
     {
         var visited = new Dictionary<string, VisitedSystem>
         {
@@ -190,7 +196,8 @@ public class RegionallyKnownBuilderTests
                 MakeRec("sys-a", "salvage", terminalAtGameSeconds: OneDay * 3),
                 MakeRec("sys-a", "combat",  terminalAtGameSeconds: OneDay * 8)),
             currentGameSeconds: OneDay * 10);
-        Assert.Equal("combat", result![0].RecentActivity);
+        Assert.NotNull(result![0].RecentActivity);
+        Assert.Equal(new[] { "kill_enemies" }, result[0].RecentActivity);
     }
 
     // ---- Ordering / caps ----

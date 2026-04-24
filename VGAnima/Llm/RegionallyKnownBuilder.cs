@@ -15,11 +15,15 @@ namespace VGAnima.Llm;
 ///   <item><b>Face recognition</b> — driven by <see cref="VisitedSystem.VisitCount"/>.
 ///         Threshold (<see cref="MinVisitsThreshold"/>) filters tourist-
 ///         grade traffic; anything ≥ 3 counts.</item>
-///   <item><b>Recent activity</b> — archetype of the most recent
+///   <item><b>Recent activity</b> — objective tags of the most recent
 ///         terminated mission in that system, only when resolved less
 ///         than <see cref="StaleActivityDaysThreshold"/> game-days ago.
-///         Filled → broker can say "you've been salvaging here, yeah?";
-///         null → broker falls back to face-only ("seen you around").</item>
+///         Multi-label list (e.g. <c>[collect_salvage, kill_enemies]</c>)
+///         drawn from vanilla's own objective vocabulary via
+///         <see cref="MissionRecordArchetype.ObjectiveTags"/> — no forced
+///         single-label collapse. Non-empty → broker can say "you've
+///         been salvaging here, yeah?"; null/empty → broker falls back
+///         to face-only ("seen you around").</item>
 /// </list>
 /// Mission history is sourced from VGMissionJournal via
 /// <see cref="VgMissionJournalBridge"/>; previously this read VGAnima's
@@ -83,7 +87,7 @@ internal static class RegionallyKnownBuilder
         // can under-filter (a mission accepted inside the window but
         // resolved later would pass prefilter but fail the explicit
         // terminal-age check below). Both guards matter.
-        string? recentActivity = null;
+        IReadOnlyList<string>? recentActivity = null;
         var records = bridge.GetMissionsInSystem(visited.Guid, sinceGameSeconds);
         MissionRecord? mostRecent = null;
         foreach (var r in records)
@@ -97,7 +101,10 @@ internal static class RegionallyKnownBuilder
                 mostRecent = r;
         }
         if (mostRecent is not null)
-            recentActivity = MissionRecordArchetype.Infer(mostRecent);
+        {
+            var tags = MissionRecordArchetype.ObjectiveTags(mostRecent);
+            if (tags.Count > 0) recentActivity = tags;
+        }
 
         return new LlmRegionallyKnownEntry(
             System:           visited.Name,

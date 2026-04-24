@@ -25,6 +25,10 @@ using ItemReward = Source.MissionSystem.Rewards.Item;
 // POI) vs `Source.MissionSystem.Objectives.Mining` (the quantity-counting
 // collect objective). Alias the objective variant; POIs keep the FQN.
 using MiningObjective = Source.MissionSystem.Objectives.Mining;
+// `Salvage` has three candidates: Source.Galaxy.POI.Salvage,
+// Source.Simulation.TravelEvents.Salvage, and the objective variant.
+// Alias the objective.
+using SalvageObjective = Source.MissionSystem.Objectives.Salvage;
 
 namespace VGAnima.Missions;
 
@@ -401,8 +405,7 @@ internal static class MissionFactoryFromJson
     /// <summary>Unified builder for gather_ore / gather_salvage and their
     /// defended variants. Spawns the correct POI flavor (asteroid field vs
     /// derelict fleet), optionally attaches hostile guards, emits a
-    /// quantity-counting <see cref="MiningObjective"/> for the requested
-    /// amount.
+    /// quantity-counting gather objective for the requested amount.
     ///
     /// <para>Why <c>Mining</c> not <c>CollectItemTypes</c>: vanilla's
     /// <c>CollectItemTypes</c> is a diversity counter (HashSet of distinct
@@ -410,7 +413,15 @@ internal static class MissionFactoryFromJson
     /// wreck typically can't supply. <c>Mining</c> counts
     /// <c>tractorableItemData.itemAmount</c> per pickup — proper quantity
     /// semantics. Class name is a vanilla misnomer: it works for any
-    /// ItemCategory, not just ore.</para></summary>
+    /// ItemCategory, not just ore.</para>
+    ///
+    /// <para>Salvage uses the <see cref="SalvageObjective"/> subclass
+    /// (<c>Salvage : Mining</c>). Inherits all tracking behavior; only
+    /// overrides display text and <c>LoadoutCanRetrieveItem</c>. Emitting
+    /// the right class means VGMissionJournal records VGAnima-authored
+    /// salvage as <c>Type="Salvage"</c> — same shape as vanilla's own
+    /// <c>SalvageWreck</c> missions — so downstream consumers don't have
+    /// to peek at <c>itemCategory</c> to tell salvage from ore.</para></summary>
     private static void BuildGather(
         int requiredAmount, ItemCategory category, MissionStep step,
         SpaceStation? brokerStation, Faction sourceFaction,
@@ -446,11 +457,17 @@ internal static class MissionFactoryFromJson
             poi.dangerLevel = "@MapPOIDangerPirates";
         }
 
-        step.objectives.Add(new MiningObjective
-        {
-            itemCategory   = category,
-            requiredAmount = requiredAmount,
-        });
+        step.objectives.Add(category == ItemCategory.Salvage
+            ? (MissionObjective)new SalvageObjective
+            {
+                itemCategory   = category,
+                requiredAmount = requiredAmount,
+            }
+            : new MiningObjective
+            {
+                itemCategory   = category,
+                requiredAmount = requiredAmount,
+            });
     }
 
     /// <summary>Single <see cref="TravelToPOI"/> pointing at a specific

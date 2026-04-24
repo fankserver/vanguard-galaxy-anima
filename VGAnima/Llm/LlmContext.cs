@@ -71,11 +71,13 @@ internal sealed class LlmContext
     /// <summary>Systems where the player has accumulated enough visits
     /// (<see cref="RegionallyKnownBuilder.MinVisitsThreshold"/>) that a
     /// broker there can plausibly recognize their face. Optional
-    /// <c>recent_activity</c> carries the archetype of their most recent
-    /// completed mission in that system, gated on a
+    /// <c>recent_activity</c> carries the objective tags of their most
+    /// recent completed mission in that system (multi-label list —
+    /// <c>[collect_salvage, kill_enemies]</c> for a defended-salvage
+    /// run), gated on a
     /// <see cref="RegionallyKnownBuilder.StaleActivityDaysThreshold"/>
     /// freshness window — tells the broker HOW to frame the recognition
-    /// ("you've been salvaging around Zoran, yeah?"). Null
+    /// ("you've been salvaging around Zoran, yeah?"). Null/empty
     /// <c>recent_activity</c> = face-only ("seen you around"). Omitted
     /// from JSON when empty. See
     /// <see cref="RegionallyKnownBuilder"/>.</summary>
@@ -290,7 +292,13 @@ internal sealed record LlmJournalEntry(
     // MissionInstanceId GUID). JsonIgnore strips it from the prompt.
     [property: JsonIgnore]                           string StoryId,
     [property: JsonProperty("mission_name")]         string MissionName,
-    [property: JsonProperty("archetype")]            string Archetype,
+    // Multi-label list of canonical objective tags drawn from vanilla's
+    // own objective vocabulary (see <see cref="MissionRecordArchetype"/>).
+    // Empty list is valid and means "subclass-only mission" (e.g.
+    // TriggerObjective-shaped) — LLM reads the mission name for context
+    // in that case. Replaces the earlier single-string `archetype` field
+    // which forced a lossy priority-ladder collapse on mixed missions.
+    [property: JsonProperty("objectives")]           IReadOnlyList<string> Objectives,
     [property: JsonProperty("outcome")]              string Outcome,
     [property: JsonProperty("source_faction")]       string SourceFaction,
     [property: JsonProperty("station_name")]         string StationName,
@@ -318,8 +326,13 @@ internal sealed record LlmRegionallyKnownEntry(
     [property: JsonProperty("system")]               string  System,
     [property: JsonProperty("visits")]               int     Visits,
     [property: JsonProperty("last_visit_days_ago")]  int     LastVisitDaysAgo,
+    // Objective-tag list of the most-recent qualifying mission in this
+    // system. Multi-label to preserve mixed missions (a defended-salvage
+    // run keeps both `collect_salvage` and `kill_enemies`). Null when no
+    // fresh mission exists OR the fresh mission had no qualifying
+    // objectives — the broker falls back to face-only recognition.
     [property: JsonProperty("recent_activity", NullValueHandling = NullValueHandling.Ignore)]
-    string? RecentActivity);
+    IReadOnlyList<string>? RecentActivity);
 
 /// <summary>Live snapshot of the bar's other patrons — what else is
 /// "for sale" at this station right now, so the broker can reference
