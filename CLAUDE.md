@@ -85,7 +85,7 @@ Vanilla's `Mining` objective class is a misnomer — it's actually a polymorphic
 - `docs/vanguard-galaxy-decomp-survey.md` — canonical identifiers harvested from the decompiled `Assembly-CSharp.dll`.
 - `docs/vanguard-galaxy-wiki-survey.md` — display-name + lore counterpart.
 - `docs/vanguard-galaxy-bar-ecosystem-survey.md` — bar patron / salesman taxonomy.
-- `docs/npc-interaction-ideas.md`, `docs/special-quest-ideas.md`, `docs/v2-refactor-prototype/` — design sketches, forward-looking (not authoritative for shipped behavior).
+- `docs/npc-interaction-ideas.md`, `docs/special-quest-ideas.md` — design sketches, forward-looking (not authoritative for shipped behavior).
 
 ## Decompiling vanilla
 

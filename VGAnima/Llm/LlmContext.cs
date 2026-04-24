@@ -207,8 +207,9 @@ internal sealed record LlmFactionEntry(
 internal sealed class LlmMissionGuidance
 {
     /// <summary>Normalized weights per archetype; entries sum to 1.0 (or close,
-    /// modulo rounding). Higher = stronger recommendation. Keys are the five
-    /// archetype strings: "combat", "gather", "salvage", "deliver", "escort".
+    /// modulo rounding). Higher = stronger recommendation. Keys are the six
+    /// archetype strings from <see cref="VGAnima.Persistence.MissionArchetypes"/>:
+    /// "combat", "mining", "salvage", "trade", "deliver", "escort".
     /// Serialization preserves insertion order — ranked high-to-low.</summary>
     [JsonProperty("archetype_weights")] public IReadOnlyDictionary<string, double> ArchetypeWeights { get; set; } = null!;
 

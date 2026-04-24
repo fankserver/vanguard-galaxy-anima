@@ -113,8 +113,8 @@ public class SidecarSchemaRoundtripTests
     [Fact]
     public void Serializes_OmitsVisitedSystemsKey_WhenNull()
     {
-        // Parallels the CompletedMissions null-omission contract — keeps
-        // pre-travel sidecars byte-minimal.
+        // Null-omission on VisitedSystems keeps pre-travel (never-jumped)
+        // sidecars byte-minimal.
         var schema = new SidecarSchema(
             Version: SidecarSchema.CurrentVersion,
             Entries: System.Array.Empty<PersistedEntry>(),
