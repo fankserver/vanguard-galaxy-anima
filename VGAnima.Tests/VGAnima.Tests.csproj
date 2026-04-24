@@ -49,6 +49,14 @@
     <Reference Include="Assembly-CSharp">
       <HintPath>..\VGAnima\lib\Assembly-CSharp.dll</HintPath>
     </Reference>
+
+    <!-- VGMissionJournal — the bridge exposes MissionRecord in its method
+         signatures, so tests that touch the bridge transitively need the
+         assembly resolvable at test-run time. Copy (not Private=false)
+         because xUnit's AppDomain has no runtime plugin to shadow it. -->
+    <Reference Include="VGMissionJournal">
+      <HintPath>..\VGAnima\lib\VGMissionJournal.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

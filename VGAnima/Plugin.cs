@@ -19,7 +19,8 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
-[BepInDependency("vgtts", BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "vganima";

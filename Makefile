@@ -13,9 +13,13 @@ VGANIMA_DIR := $(PLUGIN_DIR)/VGAnima
 # Path to the sibling VGTTS checkout — we reuse its publicized stub.
 VGTTS_LIB := ../vanguard-galaxy/VGTTS/lib
 
+# Path to the sibling VGMissionJournal checkout — we reference its released DLL
+# as a typed soft-dep (runtime load is handled by BepInEx independently).
+VGMISSIONJOURNAL_DLL := ../vanguard-galaxy-missionjournal/VGMissionJournal/bin/Release/netstandard2.1/VGMissionJournal.dll
+
 DOTNET ?= $(shell command -v dotnet 2>/dev/null || echo /tmp/dnsdk/dotnet/dotnet)
 
-.PHONY: all build link-asm deploy clean test
+.PHONY: all build link-asm link-missionjournal link-libs deploy clean test
 
 all: build
 
@@ -28,7 +32,16 @@ link-asm:
 		echo "Linked Assembly-CSharp.dll from $(VGTTS_LIB)" ; \
 	fi
 
-build: link-asm
+# Symlink the latest Release-built VGMissionJournal.dll into VGAnima/lib/. Typed
+# reference only — the game loads VGMissionJournal as its own plugin at runtime.
+# Re-runs each build so the link picks up API updates as the sibling rebuilds.
+link-missionjournal:
+	@mkdir -p VGAnima/lib
+	@ln -sf "$(abspath $(VGMISSIONJOURNAL_DLL))" VGAnima/lib/VGMissionJournal.dll
+
+link-libs: link-asm link-missionjournal
+
+build: link-libs
 	DOTNET_ROOT=$(dir $(DOTNET)) $(DOTNET) build VGAnima/VGAnima.csproj -c $(CONFIG)
 
 test:

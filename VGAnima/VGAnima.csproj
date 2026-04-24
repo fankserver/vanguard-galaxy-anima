@@ -40,6 +40,15 @@
       <HintPath>lib/Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+
+    <!-- VGMissionJournal — typed soft-dep for mission-history queries.
+         Symlinked from the sibling `vanguard-galaxy-missionjournal` checkout
+         via `make link-missionjournal`. Private=false because the game ships
+         the plugin as a separate DLL; we only need compile-time types. -->
+    <Reference Include="VGMissionJournal">
+      <HintPath>lib/VGMissionJournal.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
