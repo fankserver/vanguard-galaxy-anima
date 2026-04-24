@@ -39,12 +39,10 @@ public class ContextGathererTests
         public IReadOnlyList<string> AtWar { get; set; } = new List<string>();
 
         public IReadOnlyList<string> ActiveStoryIds { get; set; } = new List<string>();
-        public IReadOnlyList<string> ArchiveRecent { get; set; } = new List<string>();
         public int? CurrentBountyLevel { get; set; }
         public int? CurrentPatrolLevel { get; set; }
         public int? CurrentIndustryLevel { get; set; }
 
-        public IReadOnlyList<string> StoryArcsActive { get; set; } = new[] { "Sandbox" };
         public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = new List<LlmWaypointSnapshot>();
         public double ElapsedSeconds { get; set; } = 18420;
     }
@@ -121,19 +119,6 @@ public class ContextGathererTests
         var ctx = new ContextGatherer().Gather(view, Broker());
 
         Assert.Equal(8, ctx.Location.ConnectedSystems.Count);
-    }
-
-    [Fact]
-    public void Gather_Caps_ArchiveRecentAt10()
-    {
-        var view = new FakeGameStateView();
-        var archive = new List<string>();
-        for (var i = 0; i < 20; i++) archive.Add($"mission-{i}");
-        view.ArchiveRecent = archive;
-
-        var ctx = new ContextGatherer().Gather(view, Broker());
-
-        Assert.Equal(10, ctx.Missions.ArchiveRecent.Count);
     }
 
     [Fact]

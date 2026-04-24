@@ -264,21 +264,6 @@ internal sealed class GameStateView : IGameStateView
         }
     }
 
-    public IReadOnlyList<string> ArchiveRecent
-    {
-        get
-        {
-            var p = GamePlayer.current;
-            if (p == null) return new List<string>();
-            // Snapshot-copy instead of aliasing: ContextGatherer's TakeLast may
-            // short-circuit to return its input when it's already short enough,
-            // which would leave the snapshot holding a live reference to
-            // GamePlayer.missionsArchive. A mission archiving mid-serialization
-            // would then mutate the "snapshot" underneath the JSON writer.
-            return new List<string>(p.missionsArchive);
-        }
-    }
-
     public int? CurrentBountyLevel
     {
         get
@@ -303,18 +288,6 @@ internal sealed class GameStateView : IGameStateView
         {
             var p = GamePlayer.current;
             return p?.currentIndustry != null ? (int?)p.industryRank : null;
-        }
-    }
-
-    public IReadOnlyList<string> StoryArcsActive
-    {
-        get
-        {
-            var p = GamePlayer.current;
-            if (p == null) return new List<string>();
-            var list = new List<string>();
-            foreach (var st in p.storytellers) list.Add(st.identifier);
-            return list;
         }
     }
 

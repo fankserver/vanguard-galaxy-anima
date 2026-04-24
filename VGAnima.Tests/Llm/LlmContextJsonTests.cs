@@ -31,7 +31,7 @@ public class LlmContextJsonTests
         {
             "player", "fleet", "location",
             "factions", "reward_clamps", "mission_guidance",
-            "missions", "story_arcs_active", "waypoints", "time", "broker",
+            "missions", "waypoints", "time", "broker",
         })
         {
             Assert.True(root.ContainsKey(key), $"missing top-level key `{key}` in serialized LlmContext");
@@ -126,12 +126,18 @@ public class LlmContextJsonTests
 
         foreach (var key in new[]
         {
-            "active_story_ids", "archive_recent",
             "current_bounty_level", "current_patrol_level", "current_industry_level",
         })
         {
             Assert.True(missions.ContainsKey(key), $"missing missions.{key}");
         }
+        // active_story_ids is server-side (drives MissionGuidance) and
+        // JsonIgnore'd — it must NOT appear in the prompt JSON.
+        Assert.False(missions.ContainsKey("active_story_ids"),
+            "active_story_ids leaked into prompt JSON — expected JsonIgnore");
+        // archive_recent was retired entirely (no LLM or server use).
+        Assert.False(missions.ContainsKey("archive_recent"),
+            "archive_recent should have been removed");
     }
 
     private static LlmContext BuildMinimal()
@@ -179,12 +185,10 @@ public class LlmContextJsonTests
             Missions = new LlmMissionsSection
             {
                 ActiveStoryIds = new List<string>(),
-                ArchiveRecent = new List<string>(),
                 CurrentBountyLevel = null,
                 CurrentPatrolLevel = null,
                 CurrentIndustryLevel = null,
             },
-            StoryArcsActive = new List<string>(),
             Waypoints = new List<LlmWaypointSnapshot>(),
             Time = new LlmTimeSection { ElapsedSeconds = 0, DayOfYear = 1 },
             Broker = new LlmBrokerSection

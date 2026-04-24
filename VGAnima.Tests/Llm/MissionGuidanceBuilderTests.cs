@@ -43,10 +43,8 @@ public class MissionGuidanceBuilderTests
         Missions = new LlmMissionsSection
         {
             ActiveStoryIds = new List<string>(),
-            ArchiveRecent  = new List<string>(),
         },
-        StoryArcsActive = new List<string>(),
-        Waypoints       = new List<LlmWaypointSnapshot>(),
+        Waypoints = new List<LlmWaypointSnapshot>(),
         Time   = new LlmTimeSection { ElapsedSeconds = 0, DayOfYear = 1 },
         Broker = new LlmBrokerSection { Name = "B", IsMale = true, Seed = "s", StationFaction = "Blue" },
     };

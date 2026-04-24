@@ -82,7 +82,6 @@ internal sealed class LlmContext
     [JsonProperty("regionally_known", NullValueHandling = NullValueHandling.Ignore)]
     public IReadOnlyList<LlmRegionallyKnownEntry>? RegionallyKnown { get; set; }
 
-    [JsonProperty("story_arcs_active")] public IReadOnlyList<string> StoryArcsActive { get; set; } = null!;
     [JsonProperty("waypoints")]    public IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; set; } = null!;
     [JsonProperty("time")]         public LlmTimeSection     Time         { get; set; } = null!;
     [JsonProperty("broker")]       public LlmBrokerSection   Broker       { get; set; } = null!;
@@ -166,8 +165,15 @@ internal sealed record LlmSystemSnapshot(
 
 internal sealed class LlmMissionsSection
 {
-    [JsonProperty("active_story_ids")]       public IReadOnlyList<string> ActiveStoryIds { get; set; } = null!;
-    [JsonProperty("archive_recent")]         public IReadOnlyList<string> ArchiveRecent { get; set; } = null!;
+    /// <summary>Server-side signal only — consumed by
+    /// <see cref="MissionGuidanceBuilder"/> to infer the player's
+    /// current active tracks (combat / gather / salvage) via storyId
+    /// keyword match. Never surfaced to the LLM: the storyId strings
+    /// are machine hashes, not dialogue material, and the LLM already
+    /// learns "what's active" from the journal's active window
+    /// (intent+faction+site). <see cref="JsonIgnore"/> strips it from
+    /// the prompt JSON.</summary>
+    [JsonIgnore] public IReadOnlyList<string> ActiveStoryIds { get; set; } = null!;
     [JsonProperty("current_bounty_level")]   public int? CurrentBountyLevel { get; set; }
     [JsonProperty("current_patrol_level")]   public int? CurrentPatrolLevel { get; set; }
     [JsonProperty("current_industry_level")] public int? CurrentIndustryLevel { get; set; }
@@ -276,7 +282,13 @@ internal sealed class LlmJournalSection
 }
 
 internal sealed record LlmJournalEntry(
-    [property: JsonProperty("storyId")]              string StoryId,
+    // StoryId is an internal dedup key used by JournalContextBuilder to
+    // keep a single record from surfacing in more than one window. The
+    // LLM never references it — prompt dedup is on intent+faction+site
+    // (see system prompt), and storyIds are unspeakable machine hashes
+    // (`vganima_llm_<sha>` or VGMissionJournal's empty-string +
+    // MissionInstanceId GUID). JsonIgnore strips it from the prompt.
+    [property: JsonIgnore]                           string StoryId,
     [property: JsonProperty("mission_name")]         string MissionName,
     [property: JsonProperty("archetype")]            string Archetype,
     [property: JsonProperty("outcome")]              string Outcome,

@@ -9,7 +9,6 @@ namespace VGAnima.Llm;
 ///   <item><c>stored_ships</c> → first 10</item>
 ///   <item><c>crew</c> → first 10</item>
 ///   <item><c>connected_systems</c> → first 8 (2-jump radius)</item>
-///   <item><c>archive_recent</c> → last 10 (most recent = end of list)</item>
 ///   <item><c>waypoints</c> → first 5</item>
 /// </list>
 /// <see cref="IGameStateView"/> already yields the "natural" lists; the
@@ -78,14 +77,11 @@ internal sealed class ContextGatherer
             Missions = new LlmMissionsSection
             {
                 ActiveStoryIds       = view.ActiveStoryIds,
-                // archive tail — most recent 10 entries.
-                ArchiveRecent        = TakeLast(view.ArchiveRecent, 10),
                 CurrentBountyLevel   = view.CurrentBountyLevel,
                 CurrentPatrolLevel   = view.CurrentPatrolLevel,
                 CurrentIndustryLevel = view.CurrentIndustryLevel,
             },
-            StoryArcsActive = view.StoryArcsActive,
-            Waypoints       = view.Waypoints.Take(5).ToList(),
+            Waypoints = view.Waypoints.Take(5).ToList(),
             Time = new LlmTimeSection
             {
                 ElapsedSeconds = view.ElapsedSeconds,
@@ -161,14 +157,4 @@ internal sealed class ContextGatherer
         return new LlmFactionEntry(FactionDisplayNames.Lookup(identifier), relation, rep);
     }
 
-    private static IReadOnlyList<T> TakeLast<T>(IReadOnlyList<T> source, int n)
-    {
-        // netstandard2.1 lacks LINQ's TakeLast on IReadOnlyList<T> generically,
-        // and Enumerable.TakeLast requires IEnumerable<T>. Open-code to avoid
-        // allocating twice.
-        if (source.Count <= n) return source;
-        var list = new List<T>(n);
-        for (var i = source.Count - n; i < source.Count; i++) list.Add(source[i]);
-        return list;
-    }
 }

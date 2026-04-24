@@ -49,15 +49,15 @@ internal interface IGameStateView
     IReadOnlyDictionary<string, int> Reputation { get; }
     IReadOnlyList<string> AtWar { get; }
 
-    // Missions
+    // Missions — ActiveStoryIds is server-side only (fed to
+    // MissionGuidanceBuilder for archetype keyword match); stripped
+    // from the LLM-facing JSON via JsonIgnore on LlmMissionsSection.
     IReadOnlyList<string> ActiveStoryIds { get; }
-    IReadOnlyList<string> ArchiveRecent { get; }
     int? CurrentBountyLevel { get; }
     int? CurrentPatrolLevel { get; }
     int? CurrentIndustryLevel { get; }
 
-    // Story + waypoints + time
-    IReadOnlyList<string> StoryArcsActive { get; }
+    // Waypoints + time
     IReadOnlyList<LlmWaypointSnapshot> Waypoints { get; }
     double ElapsedSeconds { get; }
 }
