@@ -43,7 +43,7 @@ internal sealed class GameStateView : IGameStateView
             if (p == null) return string.Empty;
             // GamePlayer.starterSpecialization is stored as int, cast to the
             // enum for the string identifier.
-            var spec = (Source.Crew.CommanderSpecialization)p.starterSpecialization;
+            var spec = (Source.Personnel.CommanderSpecialization)p.starterSpecialization;
             return spec.ToString();
         }
     }
@@ -114,9 +114,9 @@ internal sealed class GameStateView : IGameStateView
             var p = GamePlayer.current;
             if (p == null) return new List<LlmCrewSnapshot>();
             var list = new List<LlmCrewSnapshot>();
-            foreach (var c in p.crewMembers)
+            foreach (var c in p.officers)
             {
-                var display = BuildCrewDisplayName(c);
+                var display = BuildCrewDisplayName(c.firstName, c.callsign, c.lastName);
                 list.Add(new LlmCrewSnapshot(
                     Name:     display,
                     RoleHint: c.profession.ToString()));
@@ -125,14 +125,14 @@ internal sealed class GameStateView : IGameStateView
         }
     }
 
-    private static string BuildCrewDisplayName(Source.Crew.CrewMemberData c)
+    internal static string BuildCrewDisplayName(string? firstName, string? callsign, string? lastName)
     {
         // Name format matches spec §4 example: "Charlie 'Sniper' Churchill".
-        var callsign = string.IsNullOrEmpty(c.callsign) ? null : $"'{c.callsign}'";
+        var quotedCallsign = string.IsNullOrEmpty(callsign) ? null : $"'{callsign}'";
         var parts = new List<string>();
-        if (!string.IsNullOrEmpty(c.firstName)) parts.Add(c.firstName);
-        if (callsign != null) parts.Add(callsign);
-        if (!string.IsNullOrEmpty(c.lastName))  parts.Add(c.lastName);
+        if (!string.IsNullOrEmpty(firstName)) parts.Add(firstName);
+        if (quotedCallsign != null) parts.Add(quotedCallsign);
+        if (!string.IsNullOrEmpty(lastName)) parts.Add(lastName);
         return string.Join(" ", parts);
     }
 
