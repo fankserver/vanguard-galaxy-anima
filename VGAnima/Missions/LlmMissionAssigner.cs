@@ -39,6 +39,7 @@ internal sealed class LlmMissionAssigner
     private readonly Action<StoryMissionRegistry> _register;
     private readonly PersistedBrokerRegistry? _registry;
     private readonly IClock? _clock;
+    private readonly Func<bool>? _canAssign;
 
     /// <summary>Production ctor — registers into the real vanilla registry
     /// via <c>StoryMission.Add</c>. No registry/clock yet; T15 wires them
@@ -62,8 +63,10 @@ internal sealed class LlmMissionAssigner
     public LlmMissionAssigner(
         Action<StoryMissionRegistry> register,
         PersistedBrokerRegistry? registry,
-        IClock? clock)
+        IClock? clock,
+        Func<bool>? canAssign = null)
     {
+        _canAssign = canAssign;
         _register = register;
         _registry = registry;
         _clock    = clock;
@@ -117,6 +120,7 @@ internal sealed class LlmMissionAssigner
         string? systemName = null,
         IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
+        if (_canAssign?.Invoke() == false) throw new InvalidOperationException("Mission provider unavailable; no world or registry changes made.");
         var mission = MissionFactoryFromJson.Build(
             block, missionLevel, brokerStation, brokerSeed, accessibleDestinations);
 

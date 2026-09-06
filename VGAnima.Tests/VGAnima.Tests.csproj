@@ -16,6 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Mono.Cecil" Version="0.11.4" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
     <PackageReference Include="xunit" Version="2.*" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
@@ -51,6 +52,9 @@
          signatures, so tests that touch the bridge transitively need the
          assembly resolvable at test-run time. Copy (not Private=false)
          because xUnit's AppDomain has no runtime plugin to shadow it. -->
+    <Reference Include="VGModAPI.Abstractions">
+      <HintPath>../VGAnima/lib/VGModAPI.Abstractions.dll</HintPath>
+    </Reference>
     <Reference Include="VGMissionJournal">
       <HintPath>..\VGAnima\lib\VGMissionJournal.dll</HintPath>
     </Reference>

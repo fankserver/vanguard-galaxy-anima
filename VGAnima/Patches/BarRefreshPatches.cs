@@ -487,6 +487,8 @@ internal static class BarRefreshPatches
         IReadOnlyList<string>? forbiddenArchetypes = null,
         IReadOnlyList<AccessibleDestination>? accessibleDestinations = null)
     {
+        var providerSession = plugin.ProviderSession;
+        if (!providerSession.HasValue) { ReleaseInjection(station.guid); return; }
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         string rawContent;
         try
@@ -590,8 +592,11 @@ internal static class BarRefreshPatches
         // the patron is fully in bar.availablePatrons (by which point the
         // upstream "Broker already present" check can see and reject
         // subsequent injections on its own).
-        plugin.Scheduler.Enqueue(() => FinalizeBrokerInjection(
-            plugin, bar, station, newPatron, candidateSeed, story, accessibleDestinations));
+        plugin.Scheduler.Enqueue(() =>
+        {
+            if (!plugin.CanPublishFor(providerSession)) { ReleaseInjection(station.guid); return; }
+            FinalizeBrokerInjection(plugin, bar, station, newPatron, candidateSeed, story, accessibleDestinations);
+        });
     }
 
     private static void FinalizeBrokerInjection(
@@ -645,7 +650,7 @@ internal static class BarRefreshPatches
                 catch (Exception ex)
                 {
                     Plugin.Log.LogError(
-                        $"MissionFactoryFromJson threw for '{story.Mission.Name}'; " +
+                        $"Mission assignment refused or failed for '{story.Mission.Name}'; " +
                         $"skipping broker at '{station.name}': {ex}");
                     return;
                 }
@@ -1239,6 +1244,8 @@ internal static class RegistryRehydratePatches
         Plugin plugin, Bar bar, SpaceStation station, Salesman patron,
         string storyId, string systemPrompt, string userPrompt)
     {
+        var providerSession = plugin.ProviderSession;
+        if (!providerSession.HasValue) return;
         string rawContent;
         try
         {
@@ -1293,8 +1300,10 @@ internal static class RegistryRehydratePatches
             return;
         }
 
-        plugin.Scheduler.Enqueue(() => FinalizeRehydrate(
-            plugin, bar, station, patron, storyId, story));
+        plugin.Scheduler.Enqueue(() =>
+        {
+            if (plugin.CanPublishFor(providerSession)) FinalizeRehydrate(plugin, bar, station, patron, storyId, story);
+        });
     }
 
     [System.Obsolete("Superseded by PersistedBrokerRegistry-driven rehydration in T14. Remove after T17 E2E verification.")]
