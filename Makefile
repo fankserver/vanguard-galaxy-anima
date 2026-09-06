@@ -20,7 +20,7 @@ VGMISSIONJOURNAL_DLL := ../vanguard-galaxy-missionjournal/VGMissionJournal/bin/R
 
 DOTNET ?= $(shell command -v dotnet 2>/dev/null || echo /tmp/dnsdk/dotnet/dotnet)
 
-.PHONY: all build link-asm refresh-asm check-asm-source link-missionjournal link-libs deploy clean test
+.PHONY: all build link-asm refresh-asm refresh-test-asm link-test-asm check-asm-source link-missionjournal link-libs deploy clean test
 
 all: build
 
@@ -52,7 +52,19 @@ link-libs: link-asm link-missionjournal
 build: link-libs
 	DOTNET_ROOT=$(dir $(DOTNET)) $(DOTNET) build VGAnima/VGAnima.csproj -c $(CONFIG)
 
-test: link-libs
+# Host tests need managed constructors/getters, not the throw-only compile stub.
+refresh-test-asm: check-asm-source
+	mkdir -p .local-test-reference
+	DOTNET_ROLL_FORWARD=LatestMajor $(PUBLICIZER) "$(GAME_DIR)/VanguardGalaxy_Data/Managed/Assembly-CSharp.dll" -o .local-test-reference/
+	$(MAKE) check-asm-source
+	@printf '%s' '$(GAME_ASSEMBLY_SHA256)' > .local-test-reference/source.sha256
+	@sha256sum .local-test-reference/Assembly-CSharp-publicized.dll > .local-test-reference/reference.sha256
+
+link-test-asm:
+	@test "$$(cat .local-test-reference/source.sha256 2>/dev/null)" = "$(GAME_ASSEMBLY_SHA256)" && sha256sum --status -c .local-test-reference/reference.sha256 || { echo 'Run make refresh-test-asm to generate the private host-test runtime reference.'; exit 1; }
+	ln -sfn Assembly-CSharp-publicized.dll .local-test-reference/Assembly-CSharp.dll
+
+test: link-libs link-test-asm
 	DOTNET_ROOT=$(dir $(DOTNET)) $(DOTNET) test VGAnima.Tests/VGAnima.Tests.csproj -c $(CONFIG)
 
 deploy: build

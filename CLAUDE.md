@@ -21,9 +21,9 @@ dotnet test VGAnima.Tests/VGAnima.Tests.csproj --filter "FullyQualifiedName~Miss
 dotnet test VGAnima.Tests/VGAnima.Tests.csproj --filter "DisplayName~Build_MultipleMissionsInSystem"
 ```
 
-### Five known test failures are pre-existing and unrelated
+### Host-test runtime reference
 
-`PlaceholderMissionTests` (3) and `BrokerStateDetectorTests` (2) fail under xUnit because their assertions depend on constructing Unity `MonoBehaviour` subtypes outside a Unity runtime. Don't fix them in unrelated work; don't assume your change broke them. Current healthy baseline: ~441 passing / 17 skipped / **5 failing**.
+Run `make refresh-test-asm` once against the inspected installed game, then `make test`. Tests use a separate ignored, publicized but unstripped runtime reference; production retains its stripped compile reference. The former five PlaceholderMission/BrokerStateDetector failures came from throw-only stripped constructors/getters, not failed assertions. They now pass without assertion or production-code changes. Baseline: 450 passing / 17 skipped / 0 failing. This does not enable Unity-native calls or replace in-game qualification.
 
 ### Tests target net8.0 but may run on net10
 
