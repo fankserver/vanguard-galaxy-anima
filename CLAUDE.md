@@ -21,9 +21,9 @@ dotnet test VGAnima.Tests/VGAnima.Tests.csproj --filter "FullyQualifiedName~Miss
 dotnet test VGAnima.Tests/VGAnima.Tests.csproj --filter "DisplayName~Build_MultipleMissionsInSystem"
 ```
 
-### Five known test failures are pre-existing and unrelated
+### Host-test runtime reference
 
-`PlaceholderMissionTests` (3) and `BrokerStateDetectorTests` (2) fail under xUnit because their assertions depend on constructing Unity `MonoBehaviour` subtypes outside a Unity runtime. Don't fix them in unrelated work; don't assume your change broke them. Current healthy baseline: ~441 passing / 17 skipped / **5 failing**.
+Run `make refresh-test-asm` once against the inspected installed game, then `make test`. Tests use a separate ignored, publicized but unstripped runtime reference; production retains its stripped compile reference. The former five PlaceholderMission/BrokerStateDetector failures came from throw-only stripped constructors/getters, not failed assertions. They now pass without assertion or production-code changes. Baseline: 450 passing / 17 skipped / 0 failing. This does not enable Unity-native calls or replace in-game qualification.
 
 ### Tests target net8.0 but may run on net10
 
@@ -33,7 +33,7 @@ dotnet test VGAnima.Tests/VGAnima.Tests.csproj --filter "DisplayName~Build_Multi
 
 Two DLLs are **symlinked** into `VGAnima/lib/` by the Makefile, not committed:
 
-- `Assembly-CSharp.dll` — the game's publicized stub, maintained in the sibling `../vanguard-galaxy/VGTTS/lib/` checkout. Single source of truth across sibling mods. `make link-asm`.
+- `Assembly-CSharp.dll` — owner-local stripped/publicized reference generated with `make refresh-asm`; `make link-asm` checks source/reference hashes. See `docs/current-game-compatibility.md` for the exact inspected build. Never commit the generated DLL or private receipts.
 - `VGMissionJournal.dll` — typed soft-dep on the sibling mod. Resolved from `../vanguard-galaxy-missionjournal/VGMissionJournal/bin/Release/...`. The game loads it as its own plugin at runtime; we only need compile-time types. `make link-missionjournal`.
 
 If `VGMissionJournal.dll` is missing or stale (API drift), the soft-dep lookup in `VgMissionJournalBridge` falls back to an empty-query stub at runtime, but *compilation* will fail. Rebuild the sibling first.
@@ -82,7 +82,8 @@ Vanilla's `Mining` objective class is a misnomer — it's actually a polymorphic
 
 - `README.md` — user-facing install / usage / architecture overview. Keep in sync with behavior changes.
 - `docs/vanilla-reference.md` — vanilla game mechanics reference (reward formulas, faction model, POI lifecycle, objective types, multipliers). The authoritative source for "what does vanilla actually do."
-- `docs/vanguard-galaxy-decomp-survey.md` — canonical identifiers harvested from the decompiled `Assembly-CSharp.dll`.
+- `docs/current-game-compatibility.md` — current inspected compilation target and personnel bindings.
+- `docs/vanguard-galaxy-decomp-survey.md` — historical identifiers harvested from an older `Assembly-CSharp.dll`; verify against the current target before reuse.
 - `docs/vanguard-galaxy-wiki-survey.md` — display-name + lore counterpart.
 - `docs/vanguard-galaxy-bar-ecosystem-survey.md` — bar patron / salesman taxonomy.
 - `docs/npc-interaction-ideas.md`, `docs/special-quest-ideas.md` — design sketches, forward-looking (not authoritative for shipped behavior).

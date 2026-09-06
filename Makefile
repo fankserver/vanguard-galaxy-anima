@@ -6,12 +6,13 @@ BUILDDIR := VGAnima/bin/$(CONFIG)/$(TFM)
 BUILDDLL := $(BUILDDIR)/$(DLL)
 
 # WSL path to the game install — adjust if Steam lives elsewhere.
-GAME_DIR := /mnt/c/Program Files (x86)/Steam/steamapps/common/Vanguard Galaxy
+GAME_DIR ?= /mnt/c/Program Files (x86)/Steam/steamapps/common/Vanguard Galaxy
 PLUGIN_DIR := $(GAME_DIR)/BepInEx/plugins
 VGANIMA_DIR := $(PLUGIN_DIR)/VGAnima
 
-# Path to the sibling VGTTS checkout — we reuse its publicized stub.
-VGTTS_LIB := ../vanguard-galaxy/VGTTS/lib
+# Owner-local reference for inspected game 0.8.2.3. Never distribute game DLLs.
+PUBLICIZER ?= assembly-publicizer
+GAME_ASSEMBLY_SHA256 := a2aad60bc68c31baccd636587d3c5ba4e651eacda59b0af42cd4f17f864284fb
 
 # Path to the sibling VGMissionJournal checkout — we reference its released DLL
 # as a typed soft-dep (runtime load is handled by BepInEx independently).
@@ -19,18 +20,25 @@ VGMISSIONJOURNAL_DLL := ../vanguard-galaxy-missionjournal/VGMissionJournal/bin/R
 
 DOTNET ?= $(shell command -v dotnet 2>/dev/null || echo /tmp/dnsdk/dotnet/dotnet)
 
-.PHONY: all build link-asm link-missionjournal link-libs deploy clean test
+.PHONY: all build link-asm refresh-asm refresh-test-asm link-test-asm check-asm-source link-missionjournal link-libs deploy clean test
 
 all: build
 
-# Symlink the VGTTS-maintained publicized Assembly-CSharp.dll into VGAnima/lib/
-# so we compile against the same stub (single source of truth).
+check-asm-source:
+	@test "$$(sha256sum "$(GAME_DIR)/VanguardGalaxy_Data/Managed/Assembly-CSharp.dll" | cut -d' ' -f1)" = "$(GAME_ASSEMBLY_SHA256)" || { echo 'Unsupported game assembly; re-inspect before building.'; exit 1; }
+
+refresh-asm: check-asm-source
+	mkdir -p .local-reference
+	DOTNET_ROLL_FORWARD=LatestMajor $(PUBLICIZER) --strip "$(GAME_DIR)/VanguardGalaxy_Data/Managed/Assembly-CSharp.dll" -o .local-reference/
+	@test -s .local-reference/Assembly-CSharp-publicized.dll
+	@printf '%s' '$(GAME_ASSEMBLY_SHA256)' > .local-reference/source.sha256
+	@sha256sum .local-reference/Assembly-CSharp-publicized.dll > .local-reference/reference.sha256
+
 link-asm:
+	@if [ -f "$(GAME_DIR)/VanguardGalaxy_Data/Managed/Assembly-CSharp.dll" ]; then $(MAKE) check-asm-source; fi
+	@test "$$(cat .local-reference/source.sha256 2>/dev/null)" = "$(GAME_ASSEMBLY_SHA256)" && sha256sum --status -c .local-reference/reference.sha256 || { echo 'Run make refresh-asm using the installed game and assembly-publicizer.'; exit 1; }
 	@mkdir -p VGAnima/lib
-	@if [ ! -e "VGAnima/lib/Assembly-CSharp.dll" ]; then \
-		ln -sf "$(abspath $(VGTTS_LIB))/Assembly-CSharp.dll" VGAnima/lib/Assembly-CSharp.dll ; \
-		echo "Linked Assembly-CSharp.dll from $(VGTTS_LIB)" ; \
-	fi
+	ln -sfn "$(CURDIR)/.local-reference/Assembly-CSharp-publicized.dll" VGAnima/lib/Assembly-CSharp.dll
 
 # Symlink the latest Release-built VGMissionJournal.dll into VGAnima/lib/. Typed
 # reference only — the game loads VGMissionJournal as its own plugin at runtime.
@@ -44,7 +52,19 @@ link-libs: link-asm link-missionjournal
 build: link-libs
 	DOTNET_ROOT=$(dir $(DOTNET)) $(DOTNET) build VGAnima/VGAnima.csproj -c $(CONFIG)
 
-test:
+# Host tests need managed constructors/getters, not the throw-only compile stub.
+refresh-test-asm: check-asm-source
+	mkdir -p .local-test-reference
+	DOTNET_ROLL_FORWARD=LatestMajor $(PUBLICIZER) "$(GAME_DIR)/VanguardGalaxy_Data/Managed/Assembly-CSharp.dll" -o .local-test-reference/
+	$(MAKE) check-asm-source
+	@printf '%s' '$(GAME_ASSEMBLY_SHA256)' > .local-test-reference/source.sha256
+	@sha256sum .local-test-reference/Assembly-CSharp-publicized.dll > .local-test-reference/reference.sha256
+
+link-test-asm:
+	@test "$$(cat .local-test-reference/source.sha256 2>/dev/null)" = "$(GAME_ASSEMBLY_SHA256)" && sha256sum --status -c .local-test-reference/reference.sha256 || { echo 'Run make refresh-test-asm to generate the private host-test runtime reference.'; exit 1; }
+	ln -sfn Assembly-CSharp-publicized.dll .local-test-reference/Assembly-CSharp.dll
+
+test: link-libs link-test-asm
 	DOTNET_ROOT=$(dir $(DOTNET)) $(DOTNET) test VGAnima.Tests/VGAnima.Tests.csproj -c $(CONFIG)
 
 deploy: build
