@@ -41,13 +41,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Needed because VGAnima internal types (PatronContext, etc.) surface
-         game types like SpaceStation/Mission in their signatures. Shares the
-         same symlinked stub as VGAnima.csproj via `make link-asm`. Unlike
-         the plugin project (Private=false, game provides it at runtime), the
-         test project must copy the stub so xUnit can resolve the types. -->
+    <!-- Private unstripped reference supplies real managed constructors/getters.
+         Production still compiles against the stripped reference and never copies this DLL. -->
     <Reference Include="Assembly-CSharp">
-      <HintPath>..\VGAnima\lib\Assembly-CSharp.dll</HintPath>
+      <HintPath>..\.local-test-reference\Assembly-CSharp.dll</HintPath>
     </Reference>
 
     <!-- VGMissionJournal — the bridge exposes MissionRecord in its method
