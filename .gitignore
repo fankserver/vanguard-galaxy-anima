@@ -7,6 +7,7 @@ dist/
 
 # Publicized stub — symlinked by `make link-asm`; do not commit
 VGAnima/lib/
+.local-reference/
 
 # Editor cruft
 .vs/

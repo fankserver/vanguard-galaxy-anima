@@ -1,5 +1,7 @@
 # Vanguard Galaxy Decompilation Survey
 
+> Historical snapshot, not current CLR bindings. Personnel/reward names below include retired types. See [current-game compatibility](current-game-compatibility.md) and inspect the current assembly before coding.
+
 A catalog of canonical identifiers, enum values, and mechanic constants drawn from the decompiled `Assembly-CSharp.dll` at `/tmp/decomp/`. Feeds the VGAnima player-journal feature with machine-readable counterparts to the [wiki survey](./vanguard-galaxy-wiki-survey.md) (display names + narrative framing).
 
 **Survey date:** 2026-04-22. **Game build:** decompilation of current VG build in `/tmp/decomp/`. Citations reference decomp path + line as `Source.Foo/Bar.cs:NN`.

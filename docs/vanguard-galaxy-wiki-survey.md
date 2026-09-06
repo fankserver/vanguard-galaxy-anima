@@ -1,5 +1,7 @@
 # Vanguard Galaxy Wiki Survey
 
+> Historical lore/mechanics snapshot from the legacy mirror, not current CLR bindings. Personnel/reward identifiers may be retired; consult [current-game compatibility](current-game-compatibility.md) before implementation.
+
 A catalog of player-facing mechanics, factions, locations, and events drawn from the Fandom wiki, oriented toward building a broker-memory / player-journal system for VGAnima.
 
 **Survey date:** 2026-04-22 (wiki as of patch 0.8.0.11).
