@@ -18,9 +18,11 @@ GAME_ASSEMBLY_SHA256 := a2aad60bc68c31baccd636587d3c5ba4e651eacda59b0af42cd4f17f
 # as a typed soft-dep (runtime load is handled by BepInEx independently).
 VGMISSIONJOURNAL_DLL := ../vanguard-galaxy-missionjournal/VGMissionJournal/bin/Release/netstandard2.1/VGMissionJournal.dll
 
+VGAPI_DLL ?= ../vanguard-galaxy-api/VGModAPI.Abstractions/bin/Release/netstandard2.1/VGModAPI.Abstractions.dll
+
 DOTNET ?= $(shell command -v dotnet 2>/dev/null || echo /tmp/dnsdk/dotnet/dotnet)
 
-.PHONY: all build link-asm refresh-asm refresh-test-asm link-test-asm check-asm-source link-missionjournal link-libs deploy clean test
+.PHONY: all build link-asm refresh-asm refresh-test-asm link-test-asm check-asm-source link-missionjournal link-api link-libs deploy clean test
 
 all: build
 
@@ -47,7 +49,12 @@ link-missionjournal:
 	@mkdir -p VGAnima/lib
 	@ln -sf "$(abspath $(VGMISSIONJOURNAL_DLL))" VGAnima/lib/VGMissionJournal.dll
 
-link-libs: link-asm link-missionjournal
+link-api:
+	@test -s "$(VGAPI_DLL)" || { echo 'Build VGModAPI Release first or set VGAPI_DLL.'; exit 1; }
+	@mkdir -p VGAnima/lib
+	ln -sfn "$(abspath $(VGAPI_DLL))" VGAnima/lib/VGModAPI.Abstractions.dll
+
+link-libs: link-asm link-missionjournal link-api
 
 build: link-libs
 	DOTNET_ROOT=$(dir $(DOTNET)) $(DOTNET) build VGAnima/VGAnima.csproj -c $(CONFIG)
@@ -72,7 +79,7 @@ deploy: build
 	@mkdir -p "$(VGANIMA_DIR)"
 	# Copy every runtime assembly from bin/. CopyLocalLockFileAssemblies=true in
 	# VGAnima.csproj restricts bin/ to VGAnima.dll + NuGet runtime deps that the
-	# game doesn't ship (System.Text.Json + its transitive deps); BepInEx / Harmony /
+	# game doesn't ship; BepInEx / Harmony /
 	# UnityEngine / Newtonsoft are compile-only so they don't land here.
 	cp "$(BUILDDIR)"/*.dll "$(VGANIMA_DIR)/"
 	@if [ -f "$(BUILDDIR)/VGAnima.pdb" ]; then cp "$(BUILDDIR)/VGAnima.pdb" "$(VGANIMA_DIR)/"; fi

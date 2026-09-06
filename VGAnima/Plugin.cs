@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using BepInEx;
 using BepInEx.Logging;
+using BepInEx.Bootstrap;
+using VGModAPI;
 using HarmonyLib;
 using Source.Galaxy.POI.Station;
 using UnityEngine;
@@ -19,13 +21,14 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
+[BepInDependency(ModApi.PluginId, "0.1.8")]
 [BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "vganima";
     public const string PluginName = "Vanguard Galaxy Anima";
-    public const string PluginVersion = "0.2.0";
+    public const string PluginVersion = "0.3.0";
 
     internal static Plugin Instance { get; private set; } = null!;
     internal static ManualLogSource Log { get; private set; } = null!;
@@ -59,12 +62,31 @@ public class Plugin : BaseUnityPlugin
     internal MissionJournal.VgMissionJournalBridge MissionJournalBridge { get; private set; } = null!;
 
     private Harmony _harmony = null!;
+    private MissionEventObserver? _missionObserver;
+    private bool _active;
+    private bool _stopped;
+    private static bool MissionApiAvailable => ModApi.Missions != null && ModApi.Current?.Capabilities.Any(c => c.Name == "mission-transitions" && c.Available) == true;
+    internal Guid? ProviderSession
+    {
+        get
+        {
+            var session = ModApi.Current?.CurrentSession;
+            return _active && MissionApiAvailable && session?.Phase is SessionPhase.PlayerReady or SessionPhase.GameplayInitialized ? session.Id : null;
+        }
+    }
+    internal bool CanPublishFor(Guid? session) => session.HasValue && ProviderSession == session;
 
     private void Awake()
     {
         Instance = this;
         Log = Logger;
 
+        if (!Chainloader.PluginInfos.TryGetValue(ModApi.PluginId, out var apiPlugin) || apiPlugin.Metadata.Version.Major != 0 || apiPlugin.Metadata.Version.Minor != 1 || !MissionApiAvailable)
+        {
+            enabled = false;
+            Log.LogError("Requires VGModAPI 0.1.8–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
+            return;
+        }
         Cfg = new AnimaConfig(Config);
 
         PlayerView      = new GamePlayerView();
@@ -84,7 +106,8 @@ public class Plugin : BaseUnityPlugin
         MissionAssigner = new LlmMissionAssigner(
             register: Source.MissionSystem.StoryMission.Add,
             registry: PersistedRegistry,
-            clock:    Clock);
+            clock:    Clock,
+            canAssign: () => ProviderSession.HasValue);
 
         GameStateView = new GameStateView();
         Gatherer      = new ContextGatherer();
@@ -120,6 +143,16 @@ public class Plugin : BaseUnityPlugin
                     $"MaxTokens: {Cfg.LlmMaxTokens.Value}  " +
                     $"Temperature: {Cfg.LlmTemperature.Value}");
 
+        try { InitializeHooks(); }
+        catch (Exception error)
+        {
+            StopProvider();
+            Log.LogError("Provider initialization failed; hooks and save writes disabled: " + error);
+        }
+    }
+
+    private void InitializeHooks()
+    {
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
@@ -129,20 +162,14 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(SaveWritePatch));
         _harmony.PatchAll(typeof(SaveLoadPatch));
         _harmony.PatchAll(typeof(MissionLookupPatch));
-        // BarPurchasePatches uses nested-type Harmony annotations, same
-        // gotcha as MissionLifecyclePatches — patch the nested type
-        // directly so PatchAll actually attaches.
+        // Harmony does not traverse nested patch classes.
         _harmony.PatchAll(typeof(BarPurchasePatches.OnButtonPurchase));
         _harmony.PatchAll(typeof(ShopPurchasePatches.OnBuyAmount));
-        // MissionLifecyclePatches has no [HarmonyPatch] on the outer type —
-        // the four nested classes carry the annotations. Harmony.PatchAll(Type)
-        // does NOT traverse nested types, so passing the outer type silently
-        // attaches zero patches. Patch each nested type directly.
-        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnAcceptPatch));
-        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnCompletePatch));
-        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnFailPatch));
-        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnArchivePatch));
-        _harmony.PatchAll(typeof(MissionLifecyclePatches.OnAbandonPatch));
+        _missionObserver = new MissionEventObserver(ModApi.Missions!, PersistedRegistry, error =>
+        {
+            Log.LogError("Mission provider stopped after observer failure: " + error.Message);
+            StopProvider();
+        });
         _harmony.PatchAll(typeof(SystemEntryPatch));
 
         // Wire persistence singletons into Harmony patches (all four use the
@@ -150,13 +177,13 @@ public class Plugin : BaseUnityPlugin
         SaveWritePatch.Registry          = PersistedRegistry;
         SaveWritePatch.Io                = SidecarIO;
         SaveWritePatch.Log               = Log;
+        SaveWritePatch.CanWrite          = () => _active && MissionApiAvailable;
 
         SaveLoadPatch.Registry           = PersistedRegistry;
         SaveLoadPatch.Io                 = SidecarIO;
         SaveLoadPatch.Log                = Log;
 
         MissionLookupPatch.Registry      = PersistedRegistry;
-        MissionLifecyclePatches.Registry = PersistedRegistry;
 
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
@@ -186,11 +213,22 @@ public class Plugin : BaseUnityPlugin
         // flush — matches vanilla's "quit without save = lose changes" semantics.
         Application.quitting += OnAppQuitting;
 
+        _active = true;
         Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} patches)");
+    }
+
+    private void Update()
+    {
+        if (_active && !MissionApiAvailable)
+        {
+            StopProvider();
+            Log.LogError("Mission API unavailable; provider stopped until restart.");
+        }
     }
 
     private void OnAppQuitting()
     {
+        if (!_active || !MissionApiAvailable) return;
         var path = SaveLoadPatch.LastKnownSavePath ?? SaveWritePatch.LastKnownSavePath;
         if (path is null) return;
         try
@@ -207,11 +245,24 @@ public class Plugin : BaseUnityPlugin
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
     }
 
-    private void OnDestroy()
+    private void OnDestroy() => StopProvider();
+
+    private void StopProvider()
     {
+        if (_stopped) return;
+        _stopped = true; _active = false; enabled = false;
+        SaveWritePatch.Registry = null;
+        SaveLoadPatch.Registry = null;
         Application.quitting -= OnAppQuitting;
-        _harmony?.UnpatchSelf();
-        if (LlmClient is IDisposable disposable) disposable.Dispose();
+        Cleanup(() => _missionObserver?.Dispose());
+        Cleanup(() => _harmony?.UnpatchSelf());
+        Cleanup(() => { if (LlmClient is IDisposable disposable) disposable.Dispose(); });
+    }
+
+    private static void Cleanup(Action action)
+    {
+        try { action(); }
+        catch (Exception error) { Log?.LogError("Provider cleanup failed; restart required: " + error.Message); }
     }
 
     internal static string RedactApiKey(string? apiKey) =>

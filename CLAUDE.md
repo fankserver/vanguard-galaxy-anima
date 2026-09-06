@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build, test, deploy
 
-The `Makefile` is authoritative. The raw `dotnet` commands work too, but `make build` also refreshes symlinks to two external DLLs (see "Dependencies on sibling checkouts" below).
+The `Makefile` is authoritative. The raw `dotnet` commands work too, but `make build` also refreshes symlinks to external DLLs (see "Dependencies on sibling checkouts" below).
 
 ```bash
 make build              # symlinks libs + builds VGAnima.dll
@@ -31,9 +31,10 @@ Run `make refresh-test-asm` once against the inspected installed game, then `mak
 
 ## Dependencies on sibling checkouts
 
-Two DLLs are **symlinked** into `VGAnima/lib/` by the Makefile, not committed:
+Three DLLs are **symlinked** into `VGAnima/lib/` by the Makefile, not committed:
 
 - `Assembly-CSharp.dll` — owner-local stripped/publicized reference generated with `make refresh-asm`; `make link-asm` checks source/reference hashes. See `docs/current-game-compatibility.md` for the exact inspected build. Never commit the generated DLL or private receipts.
+- `VGModAPI.Abstractions.dll` — compile-only reference; API 0.1.8–0.1.x is a hard runtime dependency with mission events enabled. `make link-api`; override `VGAPI_DLL` for isolated worktrees. Never deploy the API assembly inside Anima's folder.
 - `VGMissionJournal.dll` — typed soft-dep on the sibling mod. Resolved from `../vanguard-galaxy-missionjournal/VGMissionJournal/bin/Release/...`. The game loads it as its own plugin at runtime; we only need compile-time types. `make link-missionjournal`.
 
 If `VGMissionJournal.dll` is missing or stale (API drift), the soft-dep lookup in `VgMissionJournalBridge` falls back to an empty-query stub at runtime, but *compilation* will fail. Rebuild the sibling first.
@@ -48,6 +49,10 @@ The end-to-end flow when the player walks into a bar:
 4. **`ResponseValidator` + `MissionBlockValidator`** — JSON schema check, whitelist enforcement, reward clamps, ASCII-only dialogue. Any failure drops the broker entirely; no fallback.
 5. **`MissionFactoryFromJson`** — intent-dispatched: each validated `LlmIntent` (7 in the whitelist) maps to concrete vanilla objective + POI + ship-composition shapes. The LLM never names a vanilla class.
 6. **`LlmMissionAssigner`** — registers the `Mission` into vanilla's `StoryMission.allMissions`, pushes a `PersistedEntry` into `PersistedBrokerRegistry`, adds the broker to the bar roster.
+
+### Mission lifecycle
+
+`Persistence/MissionEventObserver` consumes witnessed API events, not native return values. It tracks session-local occurrence GUIDs per owned provider definition; acceptance updates the registry, restoration only associates existing definitions, and the last witnessed terminal occurrence removes a definition. This is not a persistent event-history match. Direct lifecycle patches are removed; native save/load/factory/lookup hooks remain. See `docs/mission-events.md` for fault handling and legacy sidecar limitations.
 
 ### Journal / history split (important)
 

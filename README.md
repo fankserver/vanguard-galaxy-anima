@@ -6,8 +6,8 @@ VGTTS voices the dialogue if installed.
 
 ## Install
 
-1. Install [VGTTS](https://www.nexusmods.com/) (optional — without it the dialogue runs silent).
-2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. That's the only file the plugin ships (the game supplies `BepInEx`, `HarmonyX`, `Newtonsoft.Json` — no runtime deps to side-load).
+1. Install **VGModAPI 0.1.8–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. VGTTS is optional; without it dialogue runs silent.
+2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. Do not copy game DLLs or the API's assemblies into this folder; the API owns its installation.
 3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
 4. Launch the game. A `Vanguard Galaxy Anima` boot line shows up in `BepInEx/LogOutput.log`.
 
@@ -15,7 +15,8 @@ VGTTS voices the dialogue if installed.
 
 Prerequisites:
 
-- Sibling checkout of the VGTTS repo at `../vanguard-galaxy-tts/` (we symlink its publicized `Assembly-CSharp.dll`).
+- Inspected game installation and `assembly-publicizer`: run `make refresh-asm` and `make refresh-test-asm` once to generate private compile/test references. See [current compatibility](docs/current-game-compatibility.md).
+- Release builds of sibling VGModAPI (0.1.8) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
 - `dotnet` SDK on PATH, or a pre-staged install at `/tmp/dnsdk/dotnet/dotnet`.
 
 ```bash
@@ -24,6 +25,14 @@ make test              # runs the full xUnit suite
 make deploy            # copies the DLL into <game>/BepInEx/plugins/VGAnima/
 make clean             # removes bin/ obj/ dist/
 ```
+
+## Mission events and save data
+
+Version 0.3.0 replaces five direct mission lifecycle hooks with witnessed API events. It updates only Anima-owned provider definitions; restored missions do not invent new acceptance. Repeated live instances retain their definition until the last observed terminal outcome. Native missions are neither read nor mutated in these callbacks.
+
+Missing/disabled/incompatible API prevents startup. Later capability loss stops the provider and its save writes until restart; late LLM results cannot publish into another session. See [the event contract and limits](docs/mission-events.md).
+
+This is **not** an Anima save-data migration. Existing v4 `.save.vganima.json` sidecars, factory/lookup hooks and best-effort save/quit behavior remain. They are not exact-snapshot API-managed storage and carry no cross-file atomicity or failed-save rollback guarantee. Back up the vanilla save and paired sidecar together. No prompt schema or mission economics changed.
 
 ## Config (`BepInEx/config/vganima.cfg`)
 

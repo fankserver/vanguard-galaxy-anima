@@ -13,10 +13,10 @@ namespace VGAnima.Patches;
 /// in-memory <see cref="PersistedBrokerRegistry"/> to the paired sidecar
 /// at <c>{SaveGame.SavesPath}/{saveName}.save.vganima.json</c>.
 ///
-/// <para>Postfix (not prefix) ensures the sidecar only commits if vanilla's
-/// own save succeeded — avoids orphan sidecars referencing saves that
-/// never got written. Atomic write (tmp + rename) via
-/// <see cref="SidecarIO"/>. Every exception is swallowed and logged:
+/// <para>This legacy postfix is not proof of vanilla write success:
+/// Store can catch errors internally. Only the sidecar's own write is
+/// atomic (tmp + rename) via <see cref="SidecarIO"/>. It is not an
+/// exact-snapshot API save-data owner. Every exception is swallowed and logged:
 /// persistence failures must never poison vanilla's save success.</para>
 ///
 /// <para>Wiring: <see cref="Plugin"/> assigns <see cref="Registry"/>,
@@ -28,6 +28,7 @@ internal static class SaveWritePatch
     public static PersistedBrokerRegistry? Registry;
     public static SidecarIO? Io;
     public static ManualLogSource? Log;
+    internal static Func<bool>? CanWrite;
 
     /// <summary>Remembered so <c>Plugin</c>'s <c>ApplicationQuit</c> flush
     /// safety-net knows which slot the session was last attached to
@@ -41,6 +42,7 @@ internal static class SaveWritePatch
 
         try
         {
+            if (CanWrite?.Invoke() == false) return;
             var savePath    = SaveGame.SavesPath + "/" + saveName + ".save";
             var sidecarPath = SidecarPathResolver.From(savePath);
             var entries     = System.Linq.Enumerable.ToArray(Registry.All());
@@ -60,8 +62,7 @@ internal static class SaveWritePatch
         catch (Exception e)
         {
             Log?.LogError($"Sidecar flush failed for save `{saveName}`: {e}");
-            // Never rethrow: vanilla's save already succeeded; persistence
-            // is best-effort. Next save attempt will try again.
+            // Never poison the vanilla call; this sidecar remains best-effort.
         }
     }
 }
