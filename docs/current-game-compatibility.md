@@ -2,7 +2,7 @@
 
 The current compatibility target is Vanguard Galaxy **0.8.2.3**, original `Assembly-CSharp.dll` SHA-256 `a2aad60bc68c31baccd636587d3c5ba4e651eacda59b0af42cd4f17f864284fb`.
 
-Run `make refresh-asm` with the owner-installed game and `assembly-publicizer`. This generates a stripped, publicized compile reference in ignored `.local-reference/`. Build/test validate the original assembly hash and generated-reference checksum, then refresh the `lib/` symlink. No game DLL or private receipt is distributed. A game update requires reinspection, not copying an old sibling stub. In an isolated worktree, set `VGMISSIONJOURNAL_DLL` to the current sibling Release DLL path.
+Run `make refresh-asm` with the owner-installed game and `assembly-publicizer`. This generates a stripped, publicized compile reference in ignored `.local-reference/`. Build/test validate the pinned source receipt and generated-reference checksum, then refresh the `lib/` symlink. If the installed original is present, its hash is checked too. A valid previously generated private reference can be reused without a game installation; it is still never published in the repository. Set `GAME_DIR` to your installation path when generating references or checking a local install. No game DLL or private receipt is distributed. A game update requires reinspection, not copying an old sibling stub. In an isolated worktree, set `VGMISSIONJOURNAL_DLL` to the current sibling Release DLL path.
 
 Current personnel bindings:
 - `Source.Personnel.CommanderSpecialization` replaces the old `Source.Crew` namespace.

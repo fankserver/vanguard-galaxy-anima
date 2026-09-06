@@ -6,7 +6,7 @@ BUILDDIR := VGAnima/bin/$(CONFIG)/$(TFM)
 BUILDDLL := $(BUILDDIR)/$(DLL)
 
 # WSL path to the game install — adjust if Steam lives elsewhere.
-GAME_DIR := /mnt/c/Program Files (x86)/Steam/steamapps/common/Vanguard Galaxy
+GAME_DIR ?= /mnt/c/Program Files (x86)/Steam/steamapps/common/Vanguard Galaxy
 PLUGIN_DIR := $(GAME_DIR)/BepInEx/plugins
 VGANIMA_DIR := $(PLUGIN_DIR)/VGAnima
 
@@ -34,7 +34,8 @@ refresh-asm: check-asm-source
 	@printf '%s' '$(GAME_ASSEMBLY_SHA256)' > .local-reference/source.sha256
 	@sha256sum .local-reference/Assembly-CSharp-publicized.dll > .local-reference/reference.sha256
 
-link-asm: check-asm-source
+link-asm:
+	@if [ -f "$(GAME_DIR)/VanguardGalaxy_Data/Managed/Assembly-CSharp.dll" ]; then $(MAKE) check-asm-source; fi
 	@test "$$(cat .local-reference/source.sha256 2>/dev/null)" = "$(GAME_ASSEMBLY_SHA256)" && sha256sum --status -c .local-reference/reference.sha256 || { echo 'Run make refresh-asm using the installed game and assembly-publicizer.'; exit 1; }
 	@mkdir -p VGAnima/lib
 	ln -sfn "$(CURDIR)/.local-reference/Assembly-CSharp-publicized.dll" VGAnima/lib/Assembly-CSharp.dll
