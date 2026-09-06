@@ -30,7 +30,7 @@ make clean             # removes bin/ obj/ dist/
 
 Version 0.3.0 replaces five direct mission lifecycle hooks with witnessed API events. It updates only Anima-owned provider definitions; restored missions do not invent new acceptance. Repeated live instances retain their definition until the last observed terminal outcome. Native missions are neither read nor mutated in these callbacks.
 
-Missing/disabled/incompatible API prevents startup. Later capability loss stops the provider and its save writes until restart; late LLM results cannot publish into another session. See [the event contract and limits](docs/mission-events.md).
+Missing/disabled/incompatible API prevents startup. Later capability loss stops authoring, observation and save writes until restart, while retaining load/lookup safeguards for existing content; late LLM results cannot publish into another session. See [the event contract and limits](docs/mission-events.md).
 
 This is **not** an Anima save-data migration. Existing v4 `.save.vganima.json` sidecars, factory/lookup hooks and best-effort save/quit behavior remain. They are not exact-snapshot API-managed storage and carry no cross-file atomicity or failed-save rollback guarantee. Back up the vanilla save and paired sidecar together. No prompt schema or mission economics changed.
 

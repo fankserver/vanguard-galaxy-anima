@@ -62,6 +62,8 @@ public class Plugin : BaseUnityPlugin
     internal MissionJournal.VgMissionJournalBridge MissionJournalBridge { get; private set; } = null!;
 
     private Harmony _harmony = null!;
+    private Harmony? _loadSafetyHarmony;
+    private float _nextCapabilityCheck;
     private MissionEventObserver? _missionObserver;
     private bool _active;
     private bool _stopped;
@@ -153,6 +155,15 @@ public class Plugin : BaseUnityPlugin
 
     private void InitializeHooks()
     {
+        // Keep reconstruction and missing-definition protection alive after an observer stop.
+        SaveLoadPatch.Registry = PersistedRegistry;
+        SaveLoadPatch.Io = SidecarIO;
+        SaveLoadPatch.Log = Log;
+        MissionLookupPatch.Registry = PersistedRegistry;
+        _loadSafetyHarmony = new Harmony(PluginGuid + ".load-safety");
+        _loadSafetyHarmony.PatchAll(typeof(MissionLookupPatch));
+        _loadSafetyHarmony.PatchAll(typeof(SaveLoadPatch));
+
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
@@ -160,8 +171,6 @@ public class Plugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(BarUIDebugPatches));
         _harmony.PatchAll(typeof(BarPatronImageDebugPatches));
         _harmony.PatchAll(typeof(SaveWritePatch));
-        _harmony.PatchAll(typeof(SaveLoadPatch));
-        _harmony.PatchAll(typeof(MissionLookupPatch));
         // Harmony does not traverse nested patch classes.
         _harmony.PatchAll(typeof(BarPurchasePatches.OnButtonPurchase));
         _harmony.PatchAll(typeof(ShopPurchasePatches.OnBuyAmount));
@@ -178,12 +187,6 @@ public class Plugin : BaseUnityPlugin
         SaveWritePatch.Io                = SidecarIO;
         SaveWritePatch.Log               = Log;
         SaveWritePatch.CanWrite          = () => _active && MissionApiAvailable;
-
-        SaveLoadPatch.Registry           = PersistedRegistry;
-        SaveLoadPatch.Io                 = SidecarIO;
-        SaveLoadPatch.Log                = Log;
-
-        MissionLookupPatch.Registry      = PersistedRegistry;
 
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
@@ -214,16 +217,16 @@ public class Plugin : BaseUnityPlugin
         Application.quitting += OnAppQuitting;
 
         _active = true;
-        Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} patches)");
+        Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} authoring/observation patches, {_loadSafetyHarmony.GetPatchedMethods().Count()} load-safety patches)");
     }
 
     private void Update()
     {
-        if (_active && !MissionApiAvailable)
-        {
-            StopProvider();
-            Log.LogError("Mission API unavailable; provider stopped until restart.");
-        }
+        if (!_active || Time.unscaledTime < _nextCapabilityCheck) return;
+        _nextCapabilityCheck = Time.unscaledTime + 1f;
+        if (MissionApiAvailable) return;
+        StopProvider();
+        Log.LogError("Mission API unavailable; provider stopped until restart. Load safeguards remain active.");
     }
 
     private void OnAppQuitting()
@@ -245,14 +248,19 @@ public class Plugin : BaseUnityPlugin
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
     }
 
-    private void OnDestroy() => StopProvider();
+    private void OnDestroy()
+    {
+        StopProvider();
+        Cleanup(() => _loadSafetyHarmony?.UnpatchSelf());
+        SaveLoadPatch.Registry = null;
+        MissionLookupPatch.Registry = null;
+    }
 
     private void StopProvider()
     {
         if (_stopped) return;
         _stopped = true; _active = false; enabled = false;
         SaveWritePatch.Registry = null;
-        SaveLoadPatch.Registry = null;
         Application.quitting -= OnAppQuitting;
         Cleanup(() => _missionObserver?.Dispose());
         Cleanup(() => _harmony?.UnpatchSelf());

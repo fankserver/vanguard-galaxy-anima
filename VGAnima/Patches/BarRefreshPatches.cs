@@ -650,7 +650,7 @@ internal static class BarRefreshPatches
                 catch (Exception ex)
                 {
                     Plugin.Log.LogError(
-                        $"MissionFactoryFromJson threw for '{story.Mission.Name}'; " +
+                        $"Mission assignment refused or failed for '{story.Mission.Name}'; " +
                         $"skipping broker at '{station.name}': {ex}");
                     return;
                 }
