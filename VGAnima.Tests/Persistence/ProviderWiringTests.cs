@@ -14,7 +14,8 @@ public sealed class ProviderWiringTests
         var type = typeof(Plugin);
         var dependency = type.GetCustomAttributes(typeof(BepInDependency), false).Cast<BepInDependency>().Single(d => d.DependencyGUID == ModApi.PluginId);
         var metadata = type.GetCustomAttributesData().Single(a => a.AttributeType == typeof(BepInDependency) && Equals(a.ConstructorArguments[0].Value, ModApi.PluginId));
-        Assert.Equal("0.1.8", metadata.ConstructorArguments[1].Value);
+        // 0.1.9 is the first API exposing the public travel contracts this build consumes.
+        Assert.Equal("0.1.9", metadata.ConstructorArguments[1].Value);
         Assert.Equal(BepInDependency.DependencyFlags.HardDependency, dependency.Flags);
         Assert.Null(type.Assembly.GetType("VGAnima.Patches.MissionLifecyclePatches"));
         Assert.Equal(new Version(Plugin.PluginVersion), new Version(type.Assembly.GetName().Version!.ToString(3)));

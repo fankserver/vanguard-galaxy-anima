@@ -46,6 +46,13 @@ internal static class SaveLoadPatch
     public static SidecarIO? Io;
     public static ManualLogSource? Log;
 
+    /// <summary>Assigned by <see cref="Plugin"/> only while native travel
+    /// events are bound. Its visit tracking is reset here so the first
+    /// witnessed arrival after a load records against the slot just loaded.
+    /// Null when travel observation is unavailable — the load prefix itself
+    /// stays independent of it.</summary>
+    public static SystemVisitObserver? VisitObserver;
+
     /// <summary>IDs we've registered in <c>StoryMission.allMissions</c> so
     /// we can unregister them on a subsequent load. Vanilla has no public
     /// unregister API; we poke the private dict via <see cref="AccessTools"/>.</summary>
@@ -119,12 +126,10 @@ internal static class SaveLoadPatch
 
             LastKnownSavePath   = savePath;
             OrphanPurgePending  = true;
-            // Reset the system-entry latch so the first jumpgate travel
-            // after load always records, regardless of whichever system
-            // the prior session was parked in. Without this, loading a
-            // save where the player is already in X and then jumpgating
-            // to X would skip (latch still says X from a different slot).
-            SystemEntryPatch.ResetLatch();
+            // Reset the observed-travel latch so the first arrival after
+            // load records against this slot's freshly loaded visit history,
+            // regardless of whichever system the prior session was parked in.
+            VisitObserver?.ResetVisitTracking();
         }
         catch (Exception e)
         {

@@ -423,9 +423,12 @@ internal static class BarRefreshPatches
             // Regional recognition: systems where the player is a
             // regular. Composed independently of journal — survives the
             // IncludePlayerJournal toggle (it's a lightweight face-
-            // recognition signal, not mission chatter).
+            // recognition signal, not mission chatter). Omitted entirely
+            // while system-visit recording is unavailable or stopped:
+            // preserved-but-unmaintained counts would describe the player
+            // as a stranger (or a regular) on out-of-date evidence.
             IReadOnlyList<LlmRegionallyKnownEntry>? regionallyKnown = null;
-            if (plugin.PersistedRegistry != null)
+            if (plugin.PersistedRegistry != null && plugin.VisitHistoryRecording)
             {
                 regionallyKnown = RegionallyKnownBuilder.Build(
                     plugin.PersistedRegistry.VisitedSystems,

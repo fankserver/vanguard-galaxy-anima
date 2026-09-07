@@ -6,7 +6,7 @@ VGTTS voices the dialogue if installed.
 
 ## Install
 
-1. Install **VGModAPI 0.1.8–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. VGTTS is optional; without it dialogue runs silent.
+1. Install **VGModAPI 0.1.9–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
 2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. Do not copy game DLLs or the API's assemblies into this folder; the API owns its installation.
 3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
 4. Launch the game. A `Vanguard Galaxy Anima` boot line shows up in `BepInEx/LogOutput.log`.
@@ -16,7 +16,7 @@ VGTTS voices the dialogue if installed.
 Prerequisites:
 
 - Inspected game installation and `assembly-publicizer`: run `make refresh-asm` and `make refresh-test-asm` once to generate private compile/test references. See [current compatibility](docs/current-game-compatibility.md).
-- Release builds of sibling VGModAPI (0.1.8) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
+- Release builds of sibling VGModAPI (0.1.9) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
 - `dotnet` SDK on PATH, or a pre-staged install at `/tmp/dnsdk/dotnet/dotnet`.
 
 ```bash
@@ -26,9 +26,11 @@ make deploy            # copies the DLL into <game>/BepInEx/plugins/VGAnima/
 make clean             # removes bin/ obj/ dist/
 ```
 
-## Mission events and save data
+## Mission and travel events, and save data
 
-Version 0.3.0 replaces five direct mission lifecycle hooks with witnessed API events. It updates only Anima-owned provider definitions; restored missions do not invent new acceptance. Repeated live instances retain their definition until the last observed terminal outcome. Native missions are neither read nor mutated in these callbacks.
+Version 0.4.0 replaces the speculative `TravelManager.JumpToSystem` Harmony prefix with witnessed API travel arrivals and raises the API requirement to 0.1.9. Visits are counted from the actual arrival location of a jumpgate or wormhole leg, not from a requested destination: placements, requests, departures, cancellations, route completion and in-system arrivals never count. The API's travel group is opt-in and off by default; while it is unavailable or stopped, nothing is recorded, existing history is preserved, and `regionally_known` is omitted rather than pitched from stale counts. Mission authoring and the load safeguards do not depend on it. See [travel events](docs/travel-events.md).
+
+Version 0.3.0 replaced five direct mission lifecycle hooks with witnessed API events. It updates only Anima-owned provider definitions; restored missions do not invent new acceptance. Repeated live instances retain their definition until the last observed terminal outcome. Native missions are neither read nor mutated in these callbacks.
 
 Missing/disabled/incompatible API prevents startup. Later capability loss stops authoring, observation and save writes until restart, while retaining load/lookup safeguards for existing content; late LLM results cannot publish into another session. See [the event contract and limits](docs/mission-events.md).
 
@@ -68,7 +70,7 @@ This is **not** an Anima save-data migration. Existing v4 `.save.vganima.json` s
 - `bar_ecosystem` — other salesmen currently at the bar (Prospector, Salvage Scout, Equipment Rep, etc.) so the broker can reference the rest of the room organically.
 - `purchase_profile` — lifetime tallies of bar-salesman purchases (mining/salvage claims, ship PNGs, equipment) and station commodity-shop buys (mining/salvage/general/other). Signals player taste without narrating exact inventory.
 - `accessible_destinations` — stations the broker can target for `deliver_to_station` / `haul_goods` intents (0-1 jumpgate hops from this system, capped at 8, ranked by distance + same-faction-as-broker).
-- `regionally_known` — systems where the player has ≥ 3 recorded visits. Each entry includes `visits`, `last_visit_days_ago`, and an optional `recent_activity` — a list of objective tags from the most-recent mission in that system (same vocabulary as the journal's `objectives`), filled only if resolved < 30 game-days ago. Enables "you've been salvaging around here, yeah?" framing; empty/absent falls back to face-only recognition.
+- `regionally_known` — systems where the player has ≥ 3 recorded visits; omitted entirely while system-visit recording is unavailable or stopped. Each entry includes `visits`, `last_visit_days_ago`, and an optional `recent_activity` — a list of objective tags from the most-recent mission in that system (same vocabulary as the journal's `objectives`), filled only if resolved < 30 game-days ago. Enables "you've been salvaging around here, yeah?" framing; empty/absent falls back to face-only recognition.
 - `location.station_condition` — single-word atmosphere tag (`war-torn` / `peaceful` / `bustling` / `frontier` / `normal`) that nudges the broker's linguistic register.
 - `waypoints`, `time`, `broker` (name, gender, seed, station alignment).
 
@@ -112,7 +114,7 @@ Any validation failure → no broker is injected, full system/user/raw-response 
 **7. Cross-session persistence.** Each vanilla save gets a pair-named sidecar `<save>.save.vganima.json` (schema **v4**) containing:
 
 - **In-flight missions** — full LLM-authored mission blocks, broker dialogue trees, and broker→station bindings for all `offered` + `accepted` missions.
-- **Visited-systems map** — `SystemMapData.guid` → (display name, visit count, first/last visit game-seconds). Written by the `TravelManager.JumpToSystem` Harmony prefix on every jumpgate arrival. Feeds `regionally_known`.
+- **Visited-systems map** — native system identifier → (display label, visit count, first/last visit game-seconds). Written by `SystemVisitObserver` from witnessed API travel arrivals (jumpgate + wormhole). Feeds `regionally_known`.
 
 Resolved-mission history lives in the sibling mod **VGMissionJournal** (its own sidecar). VGAnima used to keep a rolling 50-entry completed-mission log in-sidecar; that was retired in v4 because VGMissionJournal records *all* mission terminations (vanilla + VGAnima) in a richer, queryable form. See `MJ-T4` notes in the commit history.
 
@@ -154,10 +156,13 @@ Successful parses also emit the full prompt/response dump at Debug level so you 
 - **Every broker pitches combat (or mining, or salvage, or...)** — check the `mission_guidance` block in the user prompt dump. The ranked weights show why a specific archetype was picked. Weights are derived from player signals; adjust your fleet loadout / specialization / titles if the skew is unexpected.
 - **Reload a save and the mission is gone** — check `BepInEx/LogOutput.log` for the load-time banner `Loaded N broker entries from <sidecar>`. If it says `No sidecar at <path>` or `Sidecar corrupted; quarantined to ...`, the paired file was missing/unreadable; affected missions auto-archive via `PlaceholderMission`. The sidecar should live alongside the vanilla save at `{persistentDataPath}/Saves/<saveName>.save.vganima.json`.
 - **Broker in bar but no mission dialogue after reload** — the sidecar entry may have been orphan-purged (storyId not in vanilla's active/archived list AND broker seed not in any current bar). Check the load log for `Orphan-purged N stale entries`. This typically happens after loading an older save slot that doesn't match the sidecar.
+- **`regionally_known` never shows up in the prompt dump** — the API's travel group is opt-in. Without `[Travel] Enabled = true` in `vgmodapi.cfg` the boot log warns `native travel events unavailable`, no visits are recorded, and the section is omitted on purpose. The same happens after `system-visit recording stopped` (observer failure or capability loss); recorded history is kept and returns on restart.
 - **Sidecar not updating on save** — confirm the log emits `Flushed N broker entries to <sidecar>` after each save. No log line = the Harmony postfix didn't run (check plugin load order).
 
 ## Docs
 
+- [`docs/mission-events.md`](docs/mission-events.md) — witnessed mission-provider events, ownership and failure policy.
+- [`docs/travel-events.md`](docs/travel-events.md) — witnessed travel arrivals, what counts as a system visit, and the opt-in/degrade policy.
 - [`docs/vanilla-reference.md`](docs/vanilla-reference.md) — mechanics knowhow (reward formulas, faction model, POI lifecycle, procedural generator multipliers, clamp rationale). Standalone reference, no decompile paths required.
 - [`docs/vanguard-galaxy-decomp-survey.md`](docs/vanguard-galaxy-decomp-survey.md) — catalog of canonical identifiers drawn from the decompiled `Assembly-CSharp.dll` (factions, reputation thresholds, mission type IDs).
 - [`docs/vanguard-galaxy-wiki-survey.md`](docs/vanguard-galaxy-wiki-survey.md) — display-name + lore counterpart to the decomp survey.

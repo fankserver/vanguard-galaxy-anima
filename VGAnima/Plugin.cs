@@ -21,14 +21,14 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
-[BepInDependency(ModApi.PluginId, "0.1.8")]
+[BepInDependency(ModApi.PluginId, "0.1.9")]
 [BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "vganima";
     public const string PluginName = "Vanguard Galaxy Anima";
-    public const string PluginVersion = "0.3.0";
+    public const string PluginVersion = "0.4.0";
 
     internal static Plugin Instance { get; private set; } = null!;
     internal static ManualLogSource Log { get; private set; } = null!;
@@ -65,9 +65,17 @@ public class Plugin : BaseUnityPlugin
     private Harmony? _loadSafetyHarmony;
     private float _nextCapabilityCheck;
     private MissionEventObserver? _missionObserver;
+    private SystemVisitObserver? _visitObserver;
     private bool _active;
     private bool _stopped;
     private static bool MissionApiAvailable => ModApi.Missions != null && ModApi.Current?.Capabilities.Any(c => c.Name == "mission-transitions" && c.Available) == true;
+    /// <summary>Optional and off by default in the API ([Travel] Enabled).
+    /// Visit recording exists only while it is true; there is no travel-hook fallback.</summary>
+    private static bool TravelApiAvailable => ModApi.Travel != null && ModApi.Current?.Capabilities.Any(c => c.Name == "native-travel" && c.Available) == true;
+    /// <summary>True only while witnessed arrivals are actually being recorded.
+    /// When false the visit map is preserved but never pitched: <c>regionally_known</c>
+    /// is omitted rather than describing the player with stale counts.</summary>
+    internal bool VisitHistoryRecording => _active && TravelApiAvailable && _visitObserver?.IsRecording == true;
     internal Guid? ProviderSession
     {
         get
@@ -86,7 +94,7 @@ public class Plugin : BaseUnityPlugin
         if (!Chainloader.PluginInfos.TryGetValue(ModApi.PluginId, out var apiPlugin) || apiPlugin.Metadata.Version.Major != 0 || apiPlugin.Metadata.Version.Minor != 1 || !MissionApiAvailable)
         {
             enabled = false;
-            Log.LogError("Requires VGModAPI 0.1.8–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
+            Log.LogError("Requires VGModAPI 0.1.9–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
             return;
         }
         Cfg = new AnimaConfig(Config);
@@ -179,7 +187,7 @@ public class Plugin : BaseUnityPlugin
             Log.LogError("Mission provider stopped after observer failure: " + error.Message);
             StopProvider();
         });
-        _harmony.PatchAll(typeof(SystemEntryPatch));
+        BindVisitObserver();
 
         // Wire persistence singletons into Harmony patches (all four use the
         // same PersistedBrokerRegistry + SidecarIO instances).
@@ -190,10 +198,6 @@ public class Plugin : BaseUnityPlugin
 
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
-
-        SystemEntryPatch.Registry                  = PersistedRegistry;
-        SystemEntryPatch.Clock                     = Clock;
-        SystemEntryPatch.Log                       = Log;
 
         // Dead-sidecar startup sweep: delete sidecars whose vanilla save file
         // was removed outside the game. Bounded by save-directory size; runs
@@ -220,10 +224,46 @@ public class Plugin : BaseUnityPlugin
         Log.LogInfo($"{PluginName} v{PluginVersion} loaded ({_harmony.GetPatchedMethods().Count()} authoring/observation patches, {_loadSafetyHarmony.GetPatchedMethods().Count()} load-safety patches)");
     }
 
+    /// <summary>Binds system-visit recording to witnessed API arrivals, or
+    /// leaves the feature off. The API's travel group is opt-in and disabled by
+    /// default, so unavailability is an expected degraded state, not a fault:
+    /// nothing is recorded, recorded history stays intact, and no direct travel
+    /// hook is installed instead.</summary>
+    private void BindVisitObserver()
+    {
+        if (!TravelApiAvailable)
+        {
+            Log.LogWarning("VGModAPI native travel events unavailable ([Travel] Enabled = false or unbound): system visits are not recorded and regional recognition is omitted from prompts. Existing visit history is preserved; there is no travel-hook fallback.");
+            return;
+        }
+        _visitObserver = new SystemVisitObserver(ModApi.Travel!, PersistedRegistry, error =>
+        {
+            Log.LogError("System-visit recording stopped after travel observer failure; recorded history is preserved and regional recognition is omitted: " + error.Message);
+            StopVisitRecording();
+        });
+        SaveLoadPatch.VisitObserver = _visitObserver;
+        Log.LogInfo("Native travel events bound: system visits recorded from witnessed arrivals.");
+    }
+
+    private void StopVisitRecording()
+    {
+        SaveLoadPatch.VisitObserver = null;
+        var observer = _visitObserver;
+        _visitObserver = null;
+        Cleanup(() => observer?.Dispose());
+    }
+
     private void Update()
     {
         if (!_active || Time.unscaledTime < _nextCapabilityCheck) return;
         _nextCapabilityCheck = Time.unscaledTime + 1f;
+        // Losing the optional travel capability degrades only visit recording;
+        // mission authoring and the load safeguards are independent of it.
+        if (_visitObserver != null && !TravelApiAvailable)
+        {
+            StopVisitRecording();
+            Log.LogWarning("Travel API unavailable; system-visit recording stopped until restart. Recorded history is preserved and regional recognition is omitted.");
+        }
         if (MissionApiAvailable) return;
         StopProvider();
         Log.LogError("Mission API unavailable; provider stopped until restart. Load safeguards remain active.");
@@ -263,6 +303,7 @@ public class Plugin : BaseUnityPlugin
         SaveWritePatch.Registry = null;
         Application.quitting -= OnAppQuitting;
         Cleanup(() => _missionObserver?.Dispose());
+        StopVisitRecording();
         Cleanup(() => _harmony?.UnpatchSelf());
         Cleanup(() => { if (LlmClient is IDisposable disposable) disposable.Dispose(); });
     }
