@@ -133,13 +133,21 @@ public sealed class ProviderBindingTests
     public void RegionalRecognitionIsBuiltOnlyWhileVisitRecordingIsActive()
     {
         using var plugin = ModuleDefinition.ReadModule(typeof(Plugin).Assembly.Location);
+        // The gate and the build live in the SAME shared decision, so the window can
+        // never be built from a recording flag someone else decided earlier.
+        var decision = AllTypes(plugin)
+            .Single(t => t.FullName == "VGAnima.Llm.RegionalRecognition").Methods
+            .Single(m => m.Name == "ForCurrentContext");
+        Assert.Contains(decision.Body.Instructions,
+            i => (i.Operand as MethodReference)?.Name == "get_VisitHistoryRecording");
+        Assert.Contains(decision.Body.Instructions,
+            i => (i.Operand as MethodReference)?.FullName.Contains("RegionallyKnownBuilder::Build") == true);
+        // The bar context path composes through that decision instead of re-deriving it.
         var composing = AllTypes(plugin)
             .Single(t => t.FullName == "VGAnima.Patches.BarRefreshPatches").Methods
             .Where(m => m.HasBody)
-            .Where(m => m.Body.Instructions.Any(i => (i.Operand as MethodReference)?.FullName.Contains("RegionallyKnownBuilder::Build") == true))
+            .Where(m => m.Body.Instructions.Any(i => (i.Operand as MethodReference)?.Name == "ForCurrentContext"))
             .ToArray();
         Assert.Single(composing);
-        Assert.Contains(composing[0].Body.Instructions,
-            i => (i.Operand as MethodReference)?.Name == "get_VisitHistoryRecording");
     }
 }
