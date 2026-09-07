@@ -104,11 +104,29 @@ public sealed class ProviderBindingTests
     }
 
     [Fact]
-    public void SlotLoadResetsVisitTrackingBeforeTheNextArrival()
+    public void VisitObserverIsBoundThroughTheRefusalTolerantEntryPoint()
+    {
+        using var plugin = ModuleDefinition.ReadModule(typeof(Plugin).Assembly.Location);
+        var bind = AllTypes(plugin).Single(t => t.FullName == "VGAnima.Plugin").Methods.Single(m => m.Name == "BindVisitObserver");
+        var calls = bind.Body.Instructions.Select(i => i.Operand as MethodReference).Where(m => m != null).ToArray();
+        Assert.Contains(calls, m => m!.Name == "TryBind" && m.DeclaringType.FullName == "VGAnima.Persistence.SystemVisitObserver");
+        // A direct constructor call would let a refused subscription escape into Awake.
+        Assert.DoesNotContain(calls, m => m!.Name == ".ctor" && m.DeclaringType.FullName == "VGAnima.Persistence.SystemVisitObserver");
+    }
+
+    [Fact]
+    public void SlotLoadResetsVisitTrackingBeforeReadingTheSidecar()
     {
         using var plugin = ModuleDefinition.ReadModule(typeof(Plugin).Assembly.Location);
         var prefix = AllTypes(plugin).Single(t => t.FullName == "VGAnima.Patches.SaveLoadPatch").Methods.Single(m => m.Name == "Prefix");
-        Assert.Contains(prefix.Body.Instructions, i => (i.Operand as MethodReference)?.Name == "ResetVisitTracking");
+        var instructions = prefix.Body.Instructions.ToArray();
+        int IndexOf(string declaring, string name) => Array.FindIndex(instructions,
+            i => i.Operand is MethodReference call && call.Name == name && call.DeclaringType.FullName == declaring);
+        var reset = IndexOf("VGAnima.Persistence.SystemVisitObserver", "ResetVisitTracking");
+        var read = IndexOf("VGAnima.Persistence.SidecarIO", "Read");
+        Assert.True(reset >= 0 && read >= 0, "Load prefix lost its reset or sidecar read.");
+        // A sidecar read failure must not skip the reset after the registry was cleared.
+        Assert.True(reset < read, "Visit tracking must be reset before sidecar IO can fail.");
     }
 
     [Fact]

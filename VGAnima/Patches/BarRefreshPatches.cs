@@ -426,7 +426,9 @@ internal static class BarRefreshPatches
             // recognition signal, not mission chatter). Omitted entirely
             // while system-visit recording is unavailable or stopped:
             // preserved-but-unmaintained counts would describe the player
-            // as a stranger (or a regular) on out-of-date evidence.
+            // as a stranger (or a regular) on out-of-date evidence. Sampled
+            // once here: a stop during the in-flight call does not retract
+            // this snapshot, and cancels nothing else.
             IReadOnlyList<LlmRegionallyKnownEntry>? regionallyKnown = null;
             if (plugin.PersistedRegistry != null && plugin.VisitHistoryRecording)
             {

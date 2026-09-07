@@ -228,7 +228,8 @@ public class Plugin : BaseUnityPlugin
     /// leaves the feature off. The API's travel group is opt-in and disabled by
     /// default, so unavailability is an expected degraded state, not a fault:
     /// nothing is recorded, recorded history stays intact, and no direct travel
-    /// hook is installed instead.</summary>
+    /// hook is installed instead. A refused subscription degrades the same way
+    /// — it must not escape into the mission provider's installation.</summary>
     private void BindVisitObserver()
     {
         if (!TravelApiAvailable)
@@ -236,21 +237,28 @@ public class Plugin : BaseUnityPlugin
             Log.LogWarning("VGModAPI native travel events unavailable ([Travel] Enabled = false or unbound): system visits are not recorded and regional recognition is omitted from prompts. Existing visit history is preserved; there is no travel-hook fallback.");
             return;
         }
-        _visitObserver = new SystemVisitObserver(ModApi.Travel!, PersistedRegistry, error =>
-        {
-            Log.LogError("System-visit recording stopped after travel observer failure; recorded history is preserved and regional recognition is omitted: " + error.Message);
-            StopVisitRecording();
-        });
+        _visitObserver = SystemVisitObserver.TryBind(ModApi.Travel!, PersistedRegistry,
+            failed: error =>
+            {
+                Log.LogError("System-visit recording stopped after travel observer failure; recorded history is preserved and regional recognition is omitted: " + error.Message);
+                StopVisitRecording();
+            },
+            bindingFailed: error =>
+                Log.LogError("Travel subscription refused; system visits are not recorded and regional recognition is omitted until restart. Mission authoring, save writes and the load safeguards are unaffected, and no travel-hook fallback is installed: " + error.Message));
+        if (_visitObserver == null) return;
         SaveLoadPatch.VisitObserver = _visitObserver;
         Log.LogInfo("Native travel events bound: system visits recorded from witnessed arrivals.");
     }
 
+    /// <summary>Ends visit recording for this process without touching the
+    /// mission provider: only the recognition feature needs a restart.</summary>
     private void StopVisitRecording()
     {
         SaveLoadPatch.VisitObserver = null;
         var observer = _visitObserver;
         _visitObserver = null;
-        Cleanup(() => observer?.Dispose());
+        try { observer?.Dispose(); }
+        catch (Exception error) { Log?.LogError("Travel subscription disposal failed; system-visit recording stays off until restart. Mission provider and load safeguards are unaffected: " + error.Message); }
     }
 
     private void Update()
@@ -262,7 +270,7 @@ public class Plugin : BaseUnityPlugin
         if (_visitObserver != null && !TravelApiAvailable)
         {
             StopVisitRecording();
-            Log.LogWarning("Travel API unavailable; system-visit recording stopped until restart. Recorded history is preserved and regional recognition is omitted.");
+            Log.LogWarning("Travel API unavailable; system-visit recording stopped until restart, while mission authoring and save writes continue. Recorded history is preserved and regional recognition is omitted.");
         }
         if (MissionApiAvailable) return;
         StopProvider();

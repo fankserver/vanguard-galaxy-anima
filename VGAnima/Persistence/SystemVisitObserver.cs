@@ -53,8 +53,22 @@ internal sealed class SystemVisitObserver : IDisposable
     /// pitching stale visit counts.</summary>
     internal bool IsRecording => !_disposed && !Faulted;
 
-    internal SystemVisitObserver(ITravelEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed = null)
+    private SystemVisitObserver(ITravelEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed)
     { _events = events; _registry = registry; _failed = failed; _subscription = events.Subscribe("vganima", Receive); }
+
+    /// <summary>Subscribes to the travel service, or returns null when the
+    /// provider refuses the subscription (disposed hub, off-main-thread
+    /// installation, rejected owner). A binding failure degrades visit
+    /// recording only: it is reported through <paramref name="bindingFailed"/>
+    /// and never propagates into the caller's own startup, so the mission
+    /// provider and the load safeguards stay alive and no legacy travel hook is
+    /// installed instead.</summary>
+    internal static SystemVisitObserver? TryBind(ITravelEvents events, PersistedBrokerRegistry registry,
+        Action<Exception>? failed, Action<Exception> bindingFailed)
+    {
+        try { return new SystemVisitObserver(events, registry, failed); }
+        catch (Exception error) { bindingFailed(error); return null; }
+    }
 
     /// <summary>Drops the current-system latch and leg dedup so the first
     /// arrival after a slot load records against the newly loaded history.

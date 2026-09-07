@@ -77,17 +77,38 @@ public sealed class SystemVisitObserverTests
         }
     }
 
+    /// <summary>A travel service that refuses subscriptions, as the real hub
+    /// does after disposal or off the main thread.</summary>
+    private sealed class RefusingTravelEvents : ITravelEvents
+    {
+        public Guid? SessionId => null;
+        public TravelLocation? CurrentLocation => null;
+        public bool IsDispatchingCallbacks => false;
+        public IDisposable Subscribe(string owner, Action<TravelTransition> callback) => throw new ObjectDisposedException("TravelEvents");
+    }
+
     private static TravelLocation Location(string id, string? name = null, string? poi = "poi") =>
         new(id, poi, name, poi == null ? null : "Dock");
 
     private static (TravelEventsDouble Events, PersistedBrokerRegistry Registry) Fresh()
         => (new TravelEventsDouble(), new PersistedBrokerRegistry());
 
+    /// <summary>Every case goes through the production binding path, so a
+    /// refused subscription is exercised by the same entry point the plugin
+    /// uses.</summary>
+    private static SystemVisitObserver Bind(ITravelEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed = null)
+    {
+        var observer = SystemVisitObserver.TryBind(events, registry, failed,
+            bindingFailed: error => throw new Xunit.Sdk.XunitException("Unexpected binding failure: " + error));
+        Assert.NotNull(observer);
+        return observer!;
+    }
+
     [Fact]
     public void InitialPlacementSeedsCurrentSystemWithoutCountingAVisit()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
 
         events.Send(TravelTransitionKind.InitialPlacement, TravelMode.Unknown, 100.0, Location("sys-a", "Alpha"));
 
@@ -102,7 +123,7 @@ public sealed class SystemVisitObserverTests
     {
         var (events, registry) = Fresh();
         registry.NoteSystemVisit("sys-a", "Alpha", 10.0);
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
 
         events.Send(TravelTransitionKind.RecoveredPlacement, TravelMode.Unknown, 100.0, Location("sys-a", "Alpha"));
 
@@ -116,7 +137,7 @@ public sealed class SystemVisitObserverTests
     public void ArrivalThroughGateOrWormholeRecordsTheActualSystemAtEventTime(TravelMode mode)
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.InitialPlacement, TravelMode.Unknown, 100.0, Location("sys-a", "Alpha"));
 
         events.Send(TravelTransitionKind.Arrived, mode, 750.5, Location("sys-b", "Beta"), operation: Guid.NewGuid());
@@ -132,7 +153,7 @@ public sealed class SystemVisitObserverTests
     public void RedirectedArrivalRecordsActualLocationNotRequestedDestination()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.InitialPlacement, TravelMode.Unknown, 1.0, Location("tutorial", "Tutorial"));
         var leg = Guid.NewGuid();
 
@@ -149,7 +170,7 @@ public sealed class SystemVisitObserverTests
     public void RepeatedAndReplayedArrivalEvidenceCountsOnce()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         var leg = Guid.NewGuid();
 
         var arrival = events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 300.0, Location("sys-b", "Beta"), operation: leg);
@@ -161,10 +182,28 @@ public sealed class SystemVisitObserverTests
     }
 
     [Fact]
+    public void RefusedSubscriptionDegradesOnlyVisitRecording()
+    {
+        var registry = new PersistedBrokerRegistry();
+        registry.NoteSystemVisit("sys-a", "Alpha", 10.0);
+        var refused = new RefusingTravelEvents();
+        var failures = new List<Exception>();
+
+        // The binding path reports and swallows: a refusal must never escape
+        // into the caller's startup, so the mission provider keeps running.
+        var observer = SystemVisitObserver.TryBind(refused, registry, failed: null, bindingFailed: failures.Add);
+
+        Assert.Null(observer);
+        Assert.Single(failures);
+        Assert.IsType<ObjectDisposedException>(failures[0]);
+        Assert.Equal(1, registry.VisitedSystems["sys-a"].VisitCount);
+    }
+
+    [Fact]
     public void ReturnTripThroughAnotherSystemCountsBothVisits()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
 
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 200.0, Location("sys-b", "Beta"), operation: Guid.NewGuid());
@@ -177,10 +216,27 @@ public sealed class SystemVisitObserverTests
     }
 
     [Fact]
+    public void ReturnTripStartedFromAPlacementCountsTheOriginOnlyOnce()
+    {
+        // Same A -> B -> A route, but the first A is a placement rather than a
+        // witnessed arrival: placements never count, so A ends at one visit.
+        var (events, registry) = Fresh();
+        using var observer = Bind(events, registry);
+
+        events.Send(TravelTransitionKind.InitialPlacement, TravelMode.Unknown, 100.0, Location("sys-a", "Alpha"));
+        events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 200.0, Location("sys-b", "Beta"), operation: Guid.NewGuid());
+        events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 300.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
+
+        Assert.Equal(1, registry.VisitedSystems["sys-a"].VisitCount);
+        Assert.Equal(300.0, registry.VisitedSystems["sys-a"].FirstVisitGameSeconds);
+        Assert.Equal(1, registry.VisitedSystems["sys-b"].VisitCount);
+    }
+
+    [Fact]
     public void RequestsDeparturesCancellationsRouteCompletionAndInSystemArrivalsNeverCount()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.InitialPlacement, TravelMode.Unknown, 10.0, Location("sys-a", "Alpha"));
         var leg = Guid.NewGuid();
 
@@ -197,7 +253,7 @@ public sealed class SystemVisitObserverTests
     public void UnavailableSystemNamePreservesTheStoredLabel()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
 
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 200.0, Location("sys-b", "Beta"), operation: Guid.NewGuid());
@@ -214,7 +270,7 @@ public sealed class SystemVisitObserverTests
     public void ForeignAndStaleSessionEvidenceCannotMutateTheRegistry()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
         var stale = events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 200.0, Location("sys-b", "Beta"), operation: Guid.NewGuid());
 
@@ -230,7 +286,7 @@ public sealed class SystemVisitObserverTests
     public void ForeignEvidenceDeliveredDuringDispatchCannotMutateTheRegistry()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.BeforeDispatch = fact =>
         {
             if (fact.Kind != TravelTransitionKind.Arrived) return;
@@ -247,7 +303,7 @@ public sealed class SystemVisitObserverTests
     public void SessionReplacementResetsTrackingWithoutTruncatingHistory()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
 
         events.ReplaceSession();
@@ -263,7 +319,7 @@ public sealed class SystemVisitObserverTests
     public void ResetVisitTrackingRebasesOnTheLoadedSlotAndKeepsItsHistory()
     {
         var (events, registry) = Fresh();
-        using var observer = new SystemVisitObserver(events, registry);
+        using var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
 
         // Slot load: SaveLoadPatch replaces the registry contents, then resets tracking.
@@ -282,7 +338,7 @@ public sealed class SystemVisitObserverTests
     public void DisposedObserverStopsRecordingAndLeavesHistoryIntact()
     {
         var (events, registry) = Fresh();
-        var observer = new SystemVisitObserver(events, registry);
+        var observer = Bind(events, registry);
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
 
         observer.Dispose();
@@ -297,7 +353,7 @@ public sealed class SystemVisitObserverTests
     {
         var (events, registry) = Fresh();
         var failures = 0;
-        using var observer = new SystemVisitObserver(events, registry, _ => failures++);
+        using var observer = Bind(events, registry, _ => failures++);
         events.Send(TravelTransitionKind.Arrived, TravelMode.JumpGate, 100.0, Location("sys-a", "Alpha"), operation: Guid.NewGuid());
 
         // A malformed callback payload is the only way a pure consumer can throw.

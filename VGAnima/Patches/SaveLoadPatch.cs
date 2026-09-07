@@ -78,6 +78,13 @@ internal static class SaveLoadPatch
             // for previously-loaded factories.
             UnregisterPreviouslyRegistered();
             Registry.Clear();
+            // Take ownership of the new slot before any sidecar IO: the
+            // latch must not outlive the history it was latched against.
+            // A corrupt/unreadable sidecar leaves an empty visit map, so a
+            // surviving latch could suppress the first arrival of the newly
+            // loaded slot. Independent of the API's own per-load session
+            // reset; this prefix does not rely on it.
+            VisitObserver?.ResetVisitTracking();
 
             // (2) Derive sidecar path from the SaveGameFile instance and
             // read it. Quarantine on corrupt / unsupported version.
@@ -126,10 +133,6 @@ internal static class SaveLoadPatch
 
             LastKnownSavePath   = savePath;
             OrphanPurgePending  = true;
-            // Reset the observed-travel latch so the first arrival after
-            // load records against this slot's freshly loaded visit history,
-            // regardless of whichever system the prior session was parked in.
-            VisitObserver?.ResetVisitTracking();
         }
         catch (Exception e)
         {
