@@ -423,15 +423,16 @@ internal static class BarRefreshPatches
             // Regional recognition: systems where the player is a
             // regular. Composed independently of journal — survives the
             // IncludePlayerJournal toggle (it's a lightweight face-
-            // recognition signal, not mission chatter).
-            IReadOnlyList<LlmRegionallyKnownEntry>? regionallyKnown = null;
-            if (plugin.PersistedRegistry != null)
-            {
-                regionallyKnown = RegionallyKnownBuilder.Build(
-                    plugin.PersistedRegistry.VisitedSystems,
-                    plugin.MissionJournalBridge,
-                    currentGameSeconds: plugin.Clock.GameSeconds);
-            }
+            // recognition signal, not mission chatter). Omitted entirely
+            // while system-visit recording is unavailable or stopped:
+            // preserved-but-unmaintained counts would describe the player
+            // as a stranger (or a regular) on out-of-date evidence. Sampled
+            // once here: a stop during the in-flight call does not retract
+            // this snapshot, and cancels nothing else.
+            // One shared production decision (RegionalRecognition), reading the live
+            // recording gate and registry itself, so this gather site and any other
+            // caller can never disagree about when the window is omitted.
+            IReadOnlyList<LlmRegionallyKnownEntry>? regionallyKnown = RegionalRecognition.ForCurrentContext();
             // Bar ecosystem — filter our own brokers out by seed so the
             // broker about to speak doesn't see itself listed. Pulls from
             // the in-flight registry's known VGAnima seeds at this

@@ -1,6 +1,6 @@
-# Mission provider events (0.3.0)
+# Mission provider events (0.3.0, API minimum raised in 0.4.0)
 
-Requires VGModAPI 0.1.8–0.1.x and `[Missions] Enabled = true`. API mission events are experimental; source/host checks do not establish native or owner acceptance. No direct-hook fallback remains. Anima does not require identity continuity: its provider-definition registry is not a historical journal.
+Requires VGModAPI 0.1.9–0.1.x and `[Missions] Enabled = true`. The 0.1.9 minimum comes from the separate travel consumer; the mission contract itself is unchanged since 0.1.8. Travel observation is documented in [travel events](travel-events.md) and never gates mission authoring. API mission events are experimental; source/host checks do not establish native or owner acceptance. No direct-hook fallback remains. Anima does not require identity continuity: its provider-definition registry is not a historical journal.
 
 ## Ownership and ordering
 

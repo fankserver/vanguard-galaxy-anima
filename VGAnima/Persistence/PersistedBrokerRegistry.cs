@@ -18,10 +18,11 @@ internal sealed class PersistedBrokerRegistry
 {
     private readonly Dictionary<string, PersistedEntry> _byStoryId = new();
     private readonly Dictionary<string, string>         _storyIdBySeed = new();
-    // Per-system visit tallies keyed by SystemMapData.guid. Mutated by
-    // SystemEntryPatch on every jumpgate arrival. Unbounded — the galaxy
-    // has O(100) systems so storage is trivial, and dropping entries
-    // would invalidate regional-recognition signals.
+    // Per-system visit tallies keyed by the native system identifier.
+    // Mutated by SystemVisitObserver on every witnessed cross-system
+    // arrival. Unbounded — the galaxy has O(100) systems so storage is
+    // trivial, and dropping entries would invalidate regional-recognition
+    // signals.
     private readonly Dictionary<string, VisitedSystem>  _visitedSystems = new();
 
     public void Clear()
@@ -99,14 +100,17 @@ internal sealed class PersistedBrokerRegistry
     /// method trusts that every invocation is a genuine new arrival.
     /// <para>Snapshotting the display name on every visit (not just the
     /// first) lets a later rename propagate — cheap robustness since the
-    /// write is already happening.</para></summary>
-    public void NoteSystemVisit(string guid, string name, double gameSeconds)
+    /// write is already happening. A null <paramref name="name"/> means the
+    /// observed location carried no label: the previously stored label is
+    /// preserved (empty for a first visit) rather than replaced by a lazily
+    /// generated vanilla name.</para></summary>
+    public void NoteSystemVisit(string guid, string? name, double gameSeconds)
     {
         if (_visitedSystems.TryGetValue(guid, out var existing))
         {
             _visitedSystems[guid] = existing with
             {
-                Name                 = name,
+                Name                 = name ?? existing.Name,
                 VisitCount           = existing.VisitCount + 1,
                 LastVisitGameSeconds = gameSeconds,
             };
@@ -115,7 +119,7 @@ internal sealed class PersistedBrokerRegistry
         {
             _visitedSystems[guid] = new VisitedSystem(
                 Guid:                  guid,
-                Name:                  name,
+                Name:                  name ?? string.Empty,
                 VisitCount:            1,
                 FirstVisitGameSeconds: gameSeconds,
                 LastVisitGameSeconds:  gameSeconds);

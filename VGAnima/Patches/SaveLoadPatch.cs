@@ -46,6 +46,13 @@ internal static class SaveLoadPatch
     public static SidecarIO? Io;
     public static ManualLogSource? Log;
 
+    /// <summary>Assigned by <see cref="Plugin"/> only while native travel
+    /// events are bound. Its visit tracking is reset here so the first
+    /// witnessed arrival after a load records against the slot just loaded.
+    /// Null when travel observation is unavailable — the load prefix itself
+    /// stays independent of it.</summary>
+    public static SystemVisitObserver? VisitObserver;
+
     /// <summary>IDs we've registered in <c>StoryMission.allMissions</c> so
     /// we can unregister them on a subsequent load. Vanilla has no public
     /// unregister API; we poke the private dict via <see cref="AccessTools"/>.</summary>
@@ -71,6 +78,13 @@ internal static class SaveLoadPatch
             // for previously-loaded factories.
             UnregisterPreviouslyRegistered();
             Registry.Clear();
+            // Take ownership of the new slot before any sidecar IO: the
+            // latch must not outlive the history it was latched against.
+            // A corrupt/unreadable sidecar leaves an empty visit map, so a
+            // surviving latch could suppress the first arrival of the newly
+            // loaded slot. Independent of the API's own per-load session
+            // reset; this prefix does not rely on it.
+            VisitObserver?.ResetVisitTracking();
 
             // (2) Derive sidecar path from the SaveGameFile instance and
             // read it. Quarantine on corrupt / unsupported version.
@@ -119,12 +133,6 @@ internal static class SaveLoadPatch
 
             LastKnownSavePath   = savePath;
             OrphanPurgePending  = true;
-            // Reset the system-entry latch so the first jumpgate travel
-            // after load always records, regardless of whichever system
-            // the prior session was parked in. Without this, loading a
-            // save where the player is already in X and then jumpgating
-            // to X would skip (latch still says X from a different slot).
-            SystemEntryPatch.ResetLatch();
         }
         catch (Exception e)
         {

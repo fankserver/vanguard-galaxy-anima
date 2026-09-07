@@ -113,6 +113,22 @@ public class PersistedBrokerRegistryTests
         Assert.Equal("Alpha Prime", reg.VisitedSystems["sys-a"].Name);
     }
 
+    // An unavailable label (null in the observed location snapshot) must never
+    // erase a known name or trigger a lazy vanilla name lookup.
+    [Fact]
+    public void NoteSystemVisit_UnavailableName_PreservesStoredLabel()
+    {
+        var reg = new PersistedBrokerRegistry();
+        reg.NoteSystemVisit("sys-a", "Alpha", 100.0);
+
+        reg.NoteSystemVisit("sys-a", null, 200.0);
+        reg.NoteSystemVisit("sys-b", null, 300.0);
+
+        Assert.Equal("Alpha", reg.VisitedSystems["sys-a"].Name);
+        Assert.Equal(2, reg.VisitedSystems["sys-a"].VisitCount);
+        Assert.Equal(string.Empty, reg.VisitedSystems["sys-b"].Name);
+    }
+
     [Fact]
     public void LoadVisitedSystems_ReplacesWholesale()
     {
