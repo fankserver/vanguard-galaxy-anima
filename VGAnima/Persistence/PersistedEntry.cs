@@ -8,7 +8,8 @@ internal sealed record PersistedEntry(
     [property: JsonProperty("state")]        string State,
     [property: JsonProperty("missionBlock")] LlmMissionBlock MissionBlock,
     [property: JsonProperty("broker")]       PersistedBroker Broker,
-    [property: JsonProperty("timestamps")]   PersistedTimestamps Timestamps);
+    [property: JsonProperty("timestamps")]   PersistedTimestamps Timestamps,
+    [property: JsonProperty("barRetirementPending", DefaultValueHandling = DefaultValueHandling.Ignore)] bool BarRetirementPending = false);
 
 // Only fields vanilla doesn't persist natively are stored here. The
 // salesman's name, description, gender, and portrait all derive from

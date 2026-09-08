@@ -194,7 +194,7 @@ public class Plugin : BaseUnityPlugin
         {
             Log.LogError("Mission provider stopped after observer failure: " + error.Message);
             StopProvider();
-        });
+        }, entry => !ManagedBarsSelected || ManagedBars?.Remove(entry.Broker.Seed) == true);
         BindVisitObserver();
 
         // Wire persistence singletons into Harmony patches (all four use the
@@ -273,6 +273,8 @@ public class Plugin : BaseUnityPlugin
     {
         if (!_active || Time.unscaledTime < _nextCapabilityCheck) return;
         _nextCapabilityCheck = Time.unscaledTime + 1f;
+        try { ManagedBars?.ReconcileRetirements(this); }
+        catch (Exception error) { Log.LogError("Managed broker retirement retry failed: " + error); }
         // Losing the optional travel capability degrades only visit recording;
         // mission authoring and the load safeguards are independent of it.
         if (_visitObserver != null && !TravelApiAvailable)

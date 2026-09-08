@@ -12,12 +12,13 @@ internal sealed class MissionEventObserver : IDisposable
     private readonly Dictionary<string, HashSet<Guid>> _live = new(StringComparer.Ordinal);
     private readonly IDisposable _subscription;
     private readonly Action<Exception>? _failed;
+    private readonly Func<PersistedEntry, bool>? _retireBar;
     internal bool Faulted { get; private set; }
     private Guid? _session;
     private bool _disposed;
 
-    internal MissionEventObserver(IMissionEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed = null)
-    { _registry = registry; _failed = failed; _subscription = events.Subscribe("vganima", Receive); }
+    internal MissionEventObserver(IMissionEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed = null, Func<PersistedEntry, bool>? retireBar = null)
+    { _registry = registry; _failed = failed; _retireBar = retireBar; _subscription = events.Subscribe("vganima", Receive); }
 
     private void Receive(MissionTransition transition)
     {
@@ -43,7 +44,15 @@ internal sealed class MissionEventObserver : IDisposable
         if (transition.Kind is not (MissionTransitionKind.Completed or MissionTransitionKind.Failed or MissionTransitionKind.Abandoned or MissionTransitionKind.Removed)) return;
         if (!_live.TryGetValue(id, out var active) || !active.Remove(snapshot.InstanceId)) return;
         if (active.Count != 0) return;
-        _live.Remove(id); _registry.Remove(id);
+        _live.Remove(id);
+        var entry = _registry.Get(id);
+        if (entry != null && _retireBar != null)
+        {
+            // Keep the identity durably available if save-in-flight or another guard refuses removal.
+            _registry.MarkBarRetirement(id);
+            if (!_retireBar(entry)) return;
+        }
+        _registry.Remove(id);
     }
     public void Dispose()
     {

@@ -37,6 +37,13 @@ internal sealed class ManagedBrokerRosters : IDisposable
         }
         return true;
     }
+    internal void ReconcileRetirements(Plugin plugin)
+    {
+        if (!Session(out var session) || !plugin.CanPublishFor(session)) return;
+        foreach (var entry in plugin.PersistedRegistry.All().Where(entry => entry.BarRetirementPending).ToArray())
+            if (Remove(entry.Broker.Seed)) plugin.PersistedRegistry.Remove(entry.StoryId);
+    }
+
     internal bool HasAt(SpaceStation station) => Session(out _) && _contacts.Values.Any(patron =>
         Plugin.Instance.Registry.TryGet(patron, out var record) && record.StationId == station.guid);
 
@@ -49,6 +56,11 @@ internal sealed class ManagedBrokerRosters : IDisposable
                 && entries.Any(entry => entry.Broker.Seed == salesman.seed));
         foreach (var entry in entries)
         {
+            if (entry.BarRetirementPending)
+            {
+                if (Remove(entry.Broker.Seed)) plugin.PersistedRegistry.Remove(entry.StoryId);
+                continue;
+            }
             var local = LocalId(entry.Broker.Seed);
             if (_contacts.ContainsKey(local)) continue;
             var patron = new Salesman(entry.Broker.Seed, station);

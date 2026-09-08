@@ -62,6 +62,12 @@ internal sealed class PersistedBrokerRegistry
 
     public IReadOnlyCollection<PersistedEntry> All() => _byStoryId.Values;
 
+    public void MarkBarRetirement(string storyId)
+    {
+        if (_byStoryId.TryGetValue(storyId, out var entry))
+            _byStoryId[storyId] = entry with { BarRetirementPending = true };
+    }
+
     public void MarkAccepted(string storyId)
     {
         if (!_byStoryId.TryGetValue(storyId, out var entry)) return;
