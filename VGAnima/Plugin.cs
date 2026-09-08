@@ -27,7 +27,7 @@ namespace VGAnima;
 public class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "vganima";
-    public const string PluginName = "Vanguard Galaxy Anima";
+    public const string PluginName = "Anima";
     public const string PluginVersion = "0.4.0";
 
     internal static Plugin Instance { get; private set; } = null!;
