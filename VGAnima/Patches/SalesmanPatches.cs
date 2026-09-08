@@ -31,6 +31,10 @@ namespace VGAnima.Patches;
 [HarmonyPatch(typeof(Salesman))]
 internal static class SalesmanPatches
 {
+    // Managed API contacts invoke authored dialogue through the retained Anima record;
+    // an absent record must never fall through to an unrelated native sale.
+    internal static void InteractOwned(Salesman patron) => _ = InteractWithPatron_Prefix(patron);
+
     [HarmonyPrefix]
     [HarmonyPatch(nameof(Salesman.InteractWithPatron))]
     private static bool InteractWithPatron_Prefix(Salesman __instance)
