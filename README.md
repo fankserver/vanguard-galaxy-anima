@@ -9,7 +9,7 @@ VGTTS voices the dialogue if installed.
 1. Install **VGModAPI 0.1.25–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
 2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. Do not copy game DLLs or the API's assemblies into this folder; the API owns its installation.
 3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
-4. Launch the game. A `Vanguard Galaxy Anima` boot line shows up in `BepInEx/LogOutput.log`.
+4. Launch the game. An `Anima` boot line shows up in `BepInEx/LogOutput.log`.
 
 ## Build from source
 
@@ -149,7 +149,7 @@ Successful parses also emit the full prompt/response dump at Debug level so you 
 
 ## Troubleshooting
 
-- **No `Vanguard Galaxy Anima` lines in log** — plugin didn't load. Check `VGAnima.dll` is in `BepInEx/plugins/VGAnima/` and BepInEx itself logs in `BepInEx/LogOutput.log`.
+- **No `Anima` lines in log** — plugin didn't load. Check `VGAnima.dll` is in `BepInEx/plugins/VGAnima/` and BepInEx itself logs in `BepInEx/LogOutput.log`.
 - **Boot log shows `LLM enabled: no`** — set `Llm.Enabled=true` AND `Llm.BaseUrl=...` in `vganima.cfg`. Both must be filled.
 - **Broker never appears** — check the boot log confirmed `LLM enabled: yes`, then watch for the LLM dispatch line: `Dispatching LLM for broker at '<station>'`. If that line is missing the probability roll failed (`MissionChance` < 1.0) or a vanilla NPC is hogging the seat budget (6 cap per bar). The dispatch log lists every gate that fired at Debug level.
 - **Broker spawns but mission has weird rewards** — check the Debug log for `Reward[Credits]: base_value=X missionLevel=Y → amount=Z` lines. Rewards are area-level-anchored; an over-leveled player at a low-level station will see XP near 1 (vanilla anti-farm at work, not a bug). See `docs/vanilla-reference.md` for the formulas.
