@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using VGAnima.MissionJournal;
 using VGAnima.Persistence;
-using VGMissionJournal.Logging;
+using MissionRecord = VGAnima.MissionJournal.JournalRecord;
 
 namespace VGAnima.Llm;
 
@@ -103,7 +103,7 @@ internal static class JournalContextBuilder
 
         // Resolved-only, newest-first by terminal time.
         var resolved = records
-            .Where(r => !r.IsActive && r.Outcome.HasValue)
+            .Where(r => !r.IsActive && r.Outcome != null)
             .OrderByDescending(r => r.TerminalAtGameSeconds ?? 0.0)
             .ToList();
 
@@ -145,7 +145,7 @@ internal static class JournalContextBuilder
 
             var ageDays  = Math.Max(0,
                 (currentGameSeconds - (r.TerminalAtGameSeconds ?? 0.0)) / 86400.0);
-            var mag      = MagnitudeDerivation.Derive(r);
+            var mag      = r.Magnitude;
             var required = MagnitudeReachFormula.RequiredMagnitude(
                 jumpsAway, ageDays, sameFaction: true, fame: playerFame);
             var included = mag >= required;
@@ -174,7 +174,7 @@ internal static class JournalContextBuilder
             var ageDays     = Math.Max(0,
                 (currentGameSeconds - (r.TerminalAtGameSeconds ?? 0.0)) / 86400.0);
             var sameFaction = r.SourceFaction == factionIdentifier;
-            var mag         = MagnitudeDerivation.Derive(r);
+            var mag         = r.Magnitude;
             var required    = MagnitudeReachFormula.RequiredMagnitude(
                 jumpsAway, ageDays, sameFaction: sameFaction, fame: playerFame);
             var included    = mag >= required;
@@ -253,13 +253,13 @@ internal static class JournalContextBuilder
         new(
             StoryId:             DedupKey(r),
             MissionName:         r.MissionName ?? "",
-            Objectives:          MissionRecordArchetype.ObjectiveTags(r),
-            Outcome:             MissionRecordArchetype.OutcomeString(r.Outcome),
+            Objectives:          r.ObjectiveTags,
+            Outcome:             r.Outcome ?? "unknown",
             SourceFaction:       r.SourceFaction ?? "",
             StationName:         r.SourceStationName ?? "",
             SystemName:          r.SourceSystemName ?? "",
-            ResolvedGameSeconds: MissionRecordArchetype.ResolvedGameSeconds(r),
-            Magnitude:           MagnitudeDerivation.Derive(r),
+            ResolvedGameSeconds: r.TerminalAtGameSeconds ?? 0.0,
+            Magnitude:           r.Magnitude,
             JumpsFromHere:       jumpsFromHere);
 
     private static void LogReachDecision(

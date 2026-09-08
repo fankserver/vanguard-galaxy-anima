@@ -175,11 +175,6 @@ public class Plugin : BaseUnityPlugin
         _loadSafetyHarmony.PatchAll(typeof(SaveLoadPatch));
 
         ManagedBarsSelected = ModApi.Bars != null;
-        if (ManagedBarsSelected)
-        {
-            try { ManagedBars = new ManagedBrokerRosters(ModApi.Bars!, this); }
-            catch (Exception error) { Log.LogError("Managed bar provider unavailable: " + error); StopProvider(); return; }
-        }
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
@@ -267,6 +262,14 @@ public class Plugin : BaseUnityPlugin
         _visitObserver = null;
         try { observer?.Dispose(); }
         catch (Exception error) { Log?.LogError("Travel subscription disposal failed; system-visit recording stays off until restart. Mission provider and load safeguards are unaffected: " + error.Message); }
+    }
+
+    private void Start()
+    {
+        // Chainloader authenticates the instance only after Awake has returned.
+        if (!_active || !ManagedBarsSelected) return;
+        try { ManagedBars = new ManagedBrokerRosters(ModApi.Bars ?? throw new InvalidOperationException("Bar service disappeared after startup selection."), this); }
+        catch (Exception error) { Log.LogError("Managed bar provider unavailable: " + error); StopProvider(); }
     }
 
     private void Update()
