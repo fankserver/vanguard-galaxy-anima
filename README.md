@@ -6,7 +6,7 @@ VGTTS voices the dialogue if installed.
 
 ## Install
 
-1. Install **VGModAPI 0.1.31–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
+1. Install **VGModAPI 0.1.32–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
 2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. Do not copy game DLLs or the API's assemblies into this folder; the API owns its installation.
 3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
 4. Launch the game. An `Anima` boot line shows up in `BepInEx/LogOutput.log`.
@@ -16,7 +16,7 @@ VGTTS voices the dialogue if installed.
 Prerequisites:
 
 - Inspected game installation and `assembly-publicizer`: run `make refresh-asm` and `make refresh-test-asm` once to generate private compile/test references. See [current compatibility](docs/current-game-compatibility.md).
-- Release builds of sibling VGModAPI (0.1.31) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
+- Release builds of sibling VGModAPI (0.1.32) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
 - `dotnet` SDK on PATH, or a pre-staged install at `/tmp/dnsdk/dotnet/dotnet`.
 
 ```bash

@@ -21,7 +21,7 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
-[BepInDependency(ModApi.PluginId, "0.1.31")]
+[BepInDependency(ModApi.PluginId, "0.1.32")]
 [BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
@@ -96,7 +96,7 @@ public class Plugin : BaseUnityPlugin
         if (!Chainloader.PluginInfos.TryGetValue(ModApi.PluginId, out var apiPlugin) || apiPlugin.Metadata.Version.Major != 0 || apiPlugin.Metadata.Version.Minor != 1 || !MissionApiAvailable)
         {
             enabled = false;
-            Log.LogError("Requires VGModAPI 0.1.31–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
+            Log.LogError("Requires VGModAPI 0.1.32–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
             return;
         }
         Cfg = new AnimaConfig(Config);
