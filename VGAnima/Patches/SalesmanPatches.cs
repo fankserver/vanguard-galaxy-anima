@@ -31,6 +31,10 @@ namespace VGAnima.Patches;
 [HarmonyPatch(typeof(Salesman))]
 internal static class SalesmanPatches
 {
+    // Managed API contacts invoke authored dialogue through the retained Anima record;
+    // an absent record must never fall through to an unrelated native sale.
+    internal static void InteractOwned(Salesman patron) => _ = InteractWithPatron_Prefix(patron);
+
     [HarmonyPrefix]
     [HarmonyPatch(nameof(Salesman.InteractWithPatron))]
     private static bool InteractWithPatron_Prefix(Salesman __instance)
@@ -166,7 +170,15 @@ internal static class SalesmanPatches
             if (Plugin.Instance is not { } plugin) return;
 
             var bar = record.Station?.bar;
-            var removed = bar != null && bar.availablePatrons.Remove(patron);
+            var removed = plugin.ManagedBarsSelected
+                ? plugin.ManagedBars?.Remove(patron.seed) == true
+                : bar != null && bar.availablePatrons.Remove(patron);
+            if (plugin.ManagedBarsSelected && !removed)
+            {
+                Plugin.Log.LogWarning("Managed broker retirement refused; keeping its behavior until removal is safe.");
+                return;
+            }
+            plugin.Registry.Remove(patron);
 
             foreach (var (speaker, text) in record.WarmedLines)
                 plugin.Vgtts.DropCache(speaker, text);

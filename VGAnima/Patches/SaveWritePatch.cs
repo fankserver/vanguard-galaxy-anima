@@ -52,7 +52,8 @@ internal static class SaveWritePatch
             var schema      = new SidecarSchema(
                 Version:        SidecarSchema.CurrentVersion,
                 Entries:        entries,
-                VisitedSystems: visited.Length == 0 ? null : visited);
+                VisitedSystems: visited.Length == 0 ? null : visited,
+                BarReservations: Registry.BarReservations.Count == 0 ? null : System.Linq.Enumerable.ToArray(Registry.BarReservations));
             Io.Write(sidecarPath, schema);
             LastKnownSavePath = savePath;
             Log?.LogInfo(

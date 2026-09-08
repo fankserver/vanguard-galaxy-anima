@@ -13,6 +13,22 @@ public class SidecarIOTests : IDisposable
     public SidecarIOTests() => Directory.CreateDirectory(_tempDir);
     public void Dispose() => Directory.Delete(_tempDir, recursive: true);
 
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void LegacyUpgradeDiscardsCleanupInstructions(int version)
+    {
+        var path = Path.Combine(_tempDir, "legacy.vganima.json");
+        File.WriteAllText(path, "{\"version\":" + version + ",\"entries\":[{\"storyId\":\"owned\",\"barRetirementPending\":true}],\"barReservations\":[null,{\"seed\":\"\",\"aborted\":true}]}");
+        var result = new SidecarIO(() => DateTime.UtcNow).Read(path);
+        Assert.Equal(SidecarReadStatus.Loaded, result.Status);
+        Assert.Null(result.Schema!.BarReservations);
+        var entry = Assert.Single(result.Schema.Entries);
+        Assert.Equal("owned", entry.StoryId);
+        Assert.False(entry.BarRetirementPending);
+        Assert.True(File.Exists(path));
+    }
+
     [Fact]
     public void Read_MissingFile_ReturnsMissingStatus()
     {

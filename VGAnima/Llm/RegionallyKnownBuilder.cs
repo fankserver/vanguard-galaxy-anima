@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using VGAnima.MissionJournal;
 using VGAnima.Persistence;
-using VGMissionJournal.Logging;
+using MissionRecord = VGAnima.MissionJournal.JournalRecord;
 
 namespace VGAnima.Llm;
 
@@ -102,7 +102,7 @@ internal static class RegionallyKnownBuilder
         }
         if (mostRecent is not null)
         {
-            var tags = MissionRecordArchetype.ObjectiveTags(mostRecent);
+            var tags = mostRecent.ObjectiveTags;
             if (tags.Count > 0) recentActivity = tags;
         }
 

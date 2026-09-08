@@ -21,7 +21,7 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
-[BepInDependency(ModApi.PluginId, "0.1.9")]
+[BepInDependency(ModApi.PluginId, "0.1.32")]
 [BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
@@ -62,6 +62,8 @@ public class Plugin : BaseUnityPlugin
     internal MissionJournal.VgMissionJournalBridge MissionJournalBridge { get; private set; } = null!;
 
     private Harmony _harmony = null!;
+    internal bool ManagedBarsSelected { get; private set; }
+    internal ManagedBrokerRosters? ManagedBars { get; private set; }
     private Harmony? _loadSafetyHarmony;
     private float _nextCapabilityCheck;
     private MissionEventObserver? _missionObserver;
@@ -94,7 +96,7 @@ public class Plugin : BaseUnityPlugin
         if (!Chainloader.PluginInfos.TryGetValue(ModApi.PluginId, out var apiPlugin) || apiPlugin.Metadata.Version.Major != 0 || apiPlugin.Metadata.Version.Minor != 1 || !MissionApiAvailable)
         {
             enabled = false;
-            Log.LogError("Requires VGModAPI 0.1.9–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
+            Log.LogError("Requires VGModAPI 0.1.32–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
             return;
         }
         Cfg = new AnimaConfig(Config);
@@ -172,6 +174,7 @@ public class Plugin : BaseUnityPlugin
         _loadSafetyHarmony.PatchAll(typeof(MissionLookupPatch));
         _loadSafetyHarmony.PatchAll(typeof(SaveLoadPatch));
 
+        ManagedBarsSelected = ModApi.Bars != null;
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
@@ -186,7 +189,7 @@ public class Plugin : BaseUnityPlugin
         {
             Log.LogError("Mission provider stopped after observer failure: " + error.Message);
             StopProvider();
-        });
+        }, entry => !ManagedBarsSelected || ManagedBars?.Remove(entry.Broker.Seed) == true);
         BindVisitObserver();
 
         // Wire persistence singletons into Harmony patches (all four use the
@@ -261,10 +264,20 @@ public class Plugin : BaseUnityPlugin
         catch (Exception error) { Log?.LogError("Travel subscription disposal failed; system-visit recording stays off until restart. Mission provider and load safeguards are unaffected: " + error.Message); }
     }
 
+    private void Start()
+    {
+        // Chainloader authenticates the instance only after Awake has returned.
+        if (!_active || !ManagedBarsSelected) return;
+        try { ManagedBars = new ManagedBrokerRosters(ModApi.Bars ?? throw new InvalidOperationException("Bar service disappeared after startup selection."), this); }
+        catch (Exception error) { Log.LogError("Managed bar provider unavailable: " + error); StopProvider(); }
+    }
+
     private void Update()
     {
         if (!_active || Time.unscaledTime < _nextCapabilityCheck) return;
         _nextCapabilityCheck = Time.unscaledTime + 1f;
+        try { ManagedBars?.ReconcileRetirements(this); }
+        catch (Exception error) { Log.LogError("Managed broker retirement retry failed: " + error); }
         // Losing the optional travel capability degrades only visit recording;
         // mission authoring and the load safeguards are independent of it.
         if (_visitObserver != null && !TravelApiAvailable)
@@ -290,7 +303,8 @@ public class Plugin : BaseUnityPlugin
             SidecarIO.Write(sidecarPath, new SidecarSchema(
                 Version:        SidecarSchema.CurrentVersion,
                 Entries:        entries,
-                VisitedSystems: visited.Length == 0 ? null : visited));
+                VisitedSystems: visited.Length == 0 ? null : visited,
+                BarReservations: PersistedRegistry.BarReservations.Count == 0 ? null : System.Linq.Enumerable.ToArray(PersistedRegistry.BarReservations)));
             Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {visited.Length} visited to {sidecarPath}");
         }
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
@@ -310,6 +324,7 @@ public class Plugin : BaseUnityPlugin
         _stopped = true; _active = false; enabled = false;
         SaveWritePatch.Registry = null;
         Application.quitting -= OnAppQuitting;
+        Cleanup(() => ManagedBars?.Dispose());
         Cleanup(() => _missionObserver?.Dispose());
         StopVisitRecording();
         Cleanup(() => _harmony?.UnpatchSelf());

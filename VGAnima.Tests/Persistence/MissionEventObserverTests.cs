@@ -19,6 +19,29 @@ public sealed class MissionEventObserverTests
         public void Dispose() => _receive = null;
     }
     private static PersistedEntry Entry() => new(Id, PersistedEntryStates.Offered, null!, new PersistedBroker("seed", "station", null!), new PersistedTimestamps(0, "2026-01-01T00:00:00Z", 0, "2026-01-01T00:00:00Z"));
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExternalResolutionKeepsDurableIdentityUntilManagedRemovalSucceeds(bool removed)
+    {
+        var events = new Events(); var registry = new PersistedBrokerRegistry(); registry.Add(Entry());
+        int attempts = 0;
+        using var observer = new MissionEventObserver(events, registry, retireBar: entry => { attempts++; return removed; });
+        var instance = Guid.NewGuid();
+        events.Send(instance, MissionTransitionKind.Accepted);
+        events.Send(instance, MissionTransitionKind.Completed);
+        Assert.Equal(1, attempts);
+        if (removed) Assert.Null(registry.Get(Id));
+        else
+        {
+            var persisted = registry.Get(Id)!;
+            var reloaded = Newtonsoft.Json.JsonConvert.DeserializeObject<PersistedEntry>(Newtonsoft.Json.JsonConvert.SerializeObject(persisted))!;
+            Assert.True(reloaded.BarRetirementPending);
+            Assert.Equal("seed", reloaded.Broker.Seed);
+            Assert.Equal("station", reloaded.Broker.StationId);
+        }
+    }
+
     [Fact]
     public void AcceptanceAndWitnessedOutcomeUpdateOnlyOwnedDefinition()
     {

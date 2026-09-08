@@ -96,6 +96,7 @@ internal static class BarRefreshPatches
     [HarmonyPatch(nameof(Bar.CheckUpdatePatrons))]
     private static void CheckUpdatePatrons_Prefix(Bar __instance)
     {
+        if (Plugin.Instance?.ManagedBarsSelected == true) return;
         _snapshots.AddOrUpdate(__instance, new List<BarPatron>(__instance.availablePatrons));
 
         if (Plugin.Instance is not { } plugin) return;
@@ -129,6 +130,16 @@ internal static class BarRefreshPatches
     {
         try
         {
+            if (Plugin.Instance is { ManagedBarsSelected: true } managedPlugin)
+            {
+                var managedStation = Traverse.Create(__instance).Field<SpaceStation>("spaceStation").Value;
+                if (managedStation != null && SpaceStation.current == managedStation)
+                {
+                    managedPlugin.ManagedBars?.Rehydrate(managedPlugin, managedStation);
+                    StartInjectMissionBroker(__instance);
+                }
+                return;
+            }
             // Restore pinned brokers before eviction + injection so idempotency
             // sees them and the rolloff diff doesn't include them.
             if (_pinnedBrokers.TryGetValue(__instance, out var pinned))
@@ -232,6 +243,8 @@ internal static class BarRefreshPatches
         }
 
         var stationForDebug = Traverse.Create(bar).Field<SpaceStation>("spaceStation").Value;
+        if (plugin.ManagedBarsSelected && (plugin.ManagedBars == null || stationForDebug == null
+            || plugin.ManagedBars.HasAt(stationForDebug))) return;
         var stationNameForDebug = stationForDebug?.name ?? "<unknown>";
         Plugin.Log.LogDebug(
             $"StartInjectMissionBroker evaluating bar at '{stationNameForDebug}' " +
@@ -605,6 +618,7 @@ internal static class BarRefreshPatches
         string candidateSeed, LlmStory story,
         IReadOnlyList<AccessibleDestination>? accessibleDestinations)
     {
+        bool managedPlaced = false, committed = false;
         try
         {
             Plugin.Log.LogDebug(
@@ -622,6 +636,18 @@ internal static class BarRefreshPatches
             {
                 Plugin.Log.LogDebug("Broker already added (race); skipping");
                 return;
+            }
+
+            if (plugin.ManagedBarsSelected)
+            {
+                if (story.Mission == null) return;
+                newPatron.description = DescriptionForIntent(story.Mission.Steps[0].Intent);
+                if (plugin.ManagedBars?.Reserve(newPatron, station) != true)
+                {
+                    Plugin.Log.LogWarning("Managed broker placement refused before mission assignment.");
+                    return;
+                }
+                managedPlaced = true;
             }
 
             // Build + register the mission if the LLM returned a v2 mission block.
@@ -710,7 +736,9 @@ internal static class BarRefreshPatches
                 new ConversionRecord(
                     warmedPairs, station, storyId, story,
                     stationId:   station.guid));
-            bar.availablePatrons.Add(newPatron);
+            if (!plugin.ManagedBarsSelected) bar.availablePatrons.Add(newPatron);
+            committed = true;
+            if (managedPlaced) plugin.ManagedBars?.Commit(candidateSeed);
 
             Plugin.Log.LogInfo(
                 $"Added LLM-authored broker '{newPatron.name}' to bar at '{station.name}' " +
@@ -731,6 +759,8 @@ internal static class BarRefreshPatches
             // the patron is either in bar.availablePatrons (upstream
             // idempotency check handles subsequent attempts) or nowhere
             // (the slot is free for a fresh injection).
+            if (managedPlaced && !committed && plugin.ManagedBars?.Rollback(candidateSeed, station.guid) != true)
+                Plugin.Log.LogWarning("Managed broker rollback was refused; retained state must be reconciled before reuse.");
             ReleaseInjection(station.guid);
         }
     }
@@ -1168,6 +1198,11 @@ internal static class RegistryRehydratePatches
             if (Plugin.Instance is not { } plugin) return;
             var station = SpaceStation.current;
             if (station?.bar == null) return;
+            if (plugin.ManagedBarsSelected)
+            {
+                plugin.ManagedBars?.Rehydrate(plugin, station);
+                return;
+            }
             var bar = station.bar;
 
             foreach (var patron in bar.availablePatrons)
