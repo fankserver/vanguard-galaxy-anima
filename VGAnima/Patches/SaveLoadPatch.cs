@@ -101,6 +101,7 @@ internal static class SaveLoadPatch
                     // completed-missions field, so visited_systems
                     // survives. Null on hand-edited / empty sidecars.
                     Registry.LoadVisitedSystems(result.Schema.VisitedSystems);
+                    Registry.LoadBarReservations(result.Schema.BarReservations);
                     var visitedCount = result.Schema.VisitedSystems?.Length ?? 0;
                     Log?.LogInfo(
                         $"Loaded {result.Schema.Entries.Length} broker entr{(result.Schema.Entries.Length == 1 ? "y" : "ies")} + " +

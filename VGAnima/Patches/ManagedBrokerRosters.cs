@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using VGAnima.Cache;
+using VGAnima.Persistence;
 using System.Security.Cryptography;
 using System.Text;
 using Source.Galaxy.POI;
@@ -16,13 +17,14 @@ namespace VGAnima.Patches;
 internal sealed class ManagedBrokerRosters : IDisposable
 {
     private readonly IBarApi _api;
+    private readonly Plugin _plugin;
     private readonly IBarProvider _provider;
     private readonly Dictionary<string, Salesman> _contacts = new(StringComparer.Ordinal);
     private Guid _session;
     private readonly HashSet<string> _migratedStations = new(StringComparer.Ordinal);
     internal ManagedBrokerRosters(IBarApi api, Plugin plugin)
     {
-        _api = api;
+        _api = api; _plugin = plugin;
         var result = api.AcquireProvider(plugin);
         _provider = result.Provider ?? throw new InvalidOperationException("Bar provider refused: " + result.Status);
     }
@@ -40,12 +42,35 @@ internal sealed class ManagedBrokerRosters : IDisposable
     internal void ReconcileRetirements(Plugin plugin)
     {
         if (!Session(out var session) || !plugin.CanPublishFor(session)) return;
+        foreach (var reservation in plugin.PersistedRegistry.BarReservations.ToArray())
+            BrokerReservationRecovery.Retry(plugin.PersistedRegistry, reservation, Revoke, Remove);
         foreach (var entry in plugin.PersistedRegistry.All().Where(entry => entry.BarRetirementPending).ToArray())
             if (Remove(entry.Broker.Seed)) plugin.PersistedRegistry.Remove(entry.StoryId);
     }
 
-    internal bool HasAt(SpaceStation station) => Session(out _) && _contacts.Values.Any(patron =>
-        Plugin.Instance.Registry.TryGet(patron, out var record) && record.StationId == station.guid);
+    internal bool HasAt(SpaceStation station) => Session(out _) &&
+        (_plugin.PersistedRegistry.BarReservations.Any(reservation => reservation.StationId == station.guid)
+         || _contacts.Values.Any(patron => _plugin.Registry.TryGet(patron, out var record) && record.StationId == station.guid));
+
+    internal bool Reserve(Salesman patron, SpaceStation station)
+    {
+        _plugin.PersistedRegistry.ReserveBar(new BrokerReservation(patron.seed, station.guid));
+        if (Place(patron, station)) return true;
+        _plugin.PersistedRegistry.FinishBarReservation(patron.seed);
+        return false;
+    }
+    internal void Commit(string seed) => _plugin.PersistedRegistry.FinishBarReservation(seed);
+    private void Revoke(string seed)
+    {
+        var local = LocalId(seed);
+        _provider.Unregister(local); _contacts.Remove(local);
+    }
+    internal bool Rollback(string seed, string station)
+    {
+        var reservation = new BrokerReservation(seed, station, Aborted: true);
+        _plugin.PersistedRegistry.ReserveBar(reservation);
+        return BrokerReservationRecovery.Retry(_plugin.PersistedRegistry, reservation, Revoke, Remove);
+    }
 
     internal void Rehydrate(Plugin plugin, SpaceStation station)
     {
@@ -56,6 +81,7 @@ internal sealed class ManagedBrokerRosters : IDisposable
                 && entries.Any(entry => entry.Broker.Seed == salesman.seed));
         foreach (var entry in entries)
         {
+            if (plugin.PersistedRegistry.BarReservations.Any(reservation => reservation.Seed == entry.Broker.Seed && reservation.Aborted)) continue;
             if (entry.BarRetirementPending)
             {
                 if (Remove(entry.Broker.Seed)) plugin.PersistedRegistry.Remove(entry.StoryId);

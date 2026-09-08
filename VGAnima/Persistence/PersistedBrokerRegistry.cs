@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -25,8 +26,19 @@ internal sealed class PersistedBrokerRegistry
     // signals.
     private readonly Dictionary<string, VisitedSystem>  _visitedSystems = new();
 
+    private readonly Dictionary<string, BrokerReservation> _barReservations = new(StringComparer.Ordinal);
+    public IReadOnlyCollection<BrokerReservation> BarReservations => _barReservations.Values;
+    public void ReserveBar(BrokerReservation reservation) => _barReservations[reservation.Seed] = reservation;
+    public void FinishBarReservation(string seed) => _barReservations.Remove(seed);
+    public void LoadBarReservations(IEnumerable<BrokerReservation>? reservations)
+    {
+        _barReservations.Clear();
+        if (reservations != null) foreach (var reservation in reservations) ReserveBar(reservation);
+    }
+
     public void Clear()
     {
+        _barReservations.Clear();
         _byStoryId.Clear();
         _storyIdBySeed.Clear();
         _visitedSystems.Clear();

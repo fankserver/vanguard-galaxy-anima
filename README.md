@@ -6,7 +6,7 @@ VGTTS voices the dialogue if installed.
 
 ## Install
 
-1. Install **VGModAPI 0.1.9–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
+1. Install **VGModAPI 0.1.25–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
 2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. Do not copy game DLLs or the API's assemblies into this folder; the API owns its installation.
 3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
 4. Launch the game. A `Vanguard Galaxy Anima` boot line shows up in `BepInEx/LogOutput.log`.
@@ -16,7 +16,7 @@ VGTTS voices the dialogue if installed.
 Prerequisites:
 
 - Inspected game installation and `assembly-publicizer`: run `make refresh-asm` and `make refresh-test-asm` once to generate private compile/test references. See [current compatibility](docs/current-game-compatibility.md).
-- Release builds of sibling VGModAPI (0.1.9) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
+- Release builds of sibling VGModAPI (0.1.25) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
 - `dotnet` SDK on PATH, or a pre-staged install at `/tmp/dnsdk/dotnet/dotnet`.
 
 ```bash
@@ -28,13 +28,13 @@ make clean             # removes bin/ obj/ dist/
 
 ## Mission and travel events, and save data
 
-Version 0.4.0 replaces the speculative `TravelManager.JumpToSystem` Harmony prefix with witnessed API travel arrivals and raises the API requirement to 0.1.9. Visits are counted from the actual arrival location of a jumpgate or wormhole leg, not from a requested destination: placements, requests, departures, cancellations, route completion and in-system arrivals never count. The API's travel group is opt-in and off by default; while it is unavailable or stopped, nothing is recorded, existing history is preserved, and `regionally_known` is omitted rather than pitched from stale counts. Mission authoring and the load safeguards do not depend on it. See [travel events](docs/travel-events.md).
+System visits use witnessed API travel arrivals. Visits are counted from the actual arrival location of a jumpgate or wormhole leg, not from a requested destination: placements, requests, departures, cancellations, route completion and in-system arrivals never count. The API's travel group is opt-in and off by default; while it is unavailable or stopped, nothing is recorded, existing history is preserved, and `regionally_known` is omitted rather than pitched from stale counts. Mission authoring and the load safeguards do not depend on it. See [travel events](docs/travel-events.md).
 
 Version 0.3.0 replaced five direct mission lifecycle hooks with witnessed API events. It updates only Anima-owned provider definitions; restored missions do not invent new acceptance. Repeated live instances retain their definition until the last observed terminal outcome. Native missions are neither read nor mutated in these callbacks.
 
 Missing/disabled/incompatible API prevents startup. Later capability loss stops authoring, observation and save writes until restart, while retaining load/lookup safeguards for existing content; late LLM results cannot publish into another session. See [the event contract and limits](docs/mission-events.md).
 
-This is **not** an Anima save-data migration. Existing v4 `.save.vganima.json` sidecars, factory/lookup hooks and best-effort save/quit behavior remain. They are not exact-snapshot API-managed storage and carry no cross-file atomicity or failed-save rollback guarantee. Back up the vanilla save and paired sidecar together. No prompt schema or mission economics changed.
+This is **not** an Anima save-data migration. Versions 3 and 4 of `.save.vganima.json` are readable; writes use version 5 with managed-bar cleanup metadata. Factory/lookup hooks and best-effort save/quit behavior remain. They are not exact-snapshot API-managed storage and carry no cross-file atomicity or failed-save rollback guarantee. Back up the vanilla save and paired sidecar together. No prompt schema or mission economics changed.
 
 ## Config (`BepInEx/config/vganima.cfg`)
 
@@ -111,7 +111,7 @@ Any validation failure → no broker is injected, full system/user/raw-response 
 
 **6. Registration + rehydration.** `LlmMissionAssigner` registers the finished Mission into `StoryMission.allMissions` with a globally-unique storyId (`vganima_llm_<station-guid>_<broker-seed>_<nonce>`), and pushes a `PersistedEntry` into the in-memory `PersistedBrokerRegistry` (state=offered). The broker is then added to the bar roster.
 
-**7. Cross-session persistence.** Each vanilla save gets a pair-named sidecar `<save>.save.vganima.json` (schema **v4**) containing:
+**7. Cross-session persistence.** Each vanilla save gets a pair-named sidecar `<save>.save.vganima.json` (schema **v5**) containing:
 
 - **In-flight missions** — full LLM-authored mission blocks, broker dialogue trees, and broker→station bindings for all `offered` + `accepted` missions.
 - **Visited-systems map** — native system identifier → (display label, visit count, first/last visit game-seconds). Written by `SystemVisitObserver` from witnessed API travel arrivals (jumpgate + wormhole). Feeds `regionally_known`.

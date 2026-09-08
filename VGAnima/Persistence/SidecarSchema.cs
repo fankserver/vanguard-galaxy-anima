@@ -4,23 +4,11 @@ namespace VGAnima.Persistence;
 
 /// <summary>Top-level schema of a <c>&lt;save&gt;.vganima.json</c> sidecar.
 ///
-/// <para>Version history:
-/// <list type="bullet">
-///   <item><b>v1</b>: original objective-typed mission records. Hard cut —
-///     v1 sidecars quarantine at the binder.</item>
-///   <item><b>v2</b>: intent-based mission records. No longer upgradeable
-///     in a single hop (v2 → v4 skips the v3 contract). Quarantines.</item>
-///   <item><b>v3</b>: added <c>visited_systems</c> and
-///     <c>completed_missions</c> (rolling log of resolved VGAnima
-///     missions). Still upgradeable: the completed-missions field is
-///     dropped on read.</item>
-///   <item><b>v4</b> (current): drops <c>completed_missions</c>. Resolved
-///     mission history now comes from the VGMissionJournal plugin via
-///     <see cref="VGAnima.MissionJournal.VgMissionJournalBridge"/>;
-///     VGAnima no longer maintains its own log. v3 → v4 upgrade is
-///     lossy (completed-mission rows are discarded), but that log was
-///     only a prompt-context signal — no gameplay state loss.</item>
-/// </list></para>
+/// <para>Version 5 stores narrative definitions, visit tallies, and pending managed-bar
+/// cleanup identities. Versions 3 and 4 are accepted with empty cleanup metadata;
+/// the obsolete completed-mission log in version 3 is ignored. Versions 1 and 2,
+/// and versions newer than this reader, are not supported. Resolved mission history
+/// comes from VGMissionJournal rather than this sidecar.</para>
 ///
 /// <para>Array-typed collection properties keep their declared types
 /// matching their runtime types so <see cref="TypeNameHandling.Auto"/>
@@ -29,9 +17,10 @@ internal sealed record SidecarSchema(
     [property: JsonProperty("version")] int Version,
     [property: JsonProperty("entries")] PersistedEntry[] Entries,
     [property: JsonProperty("visited_systems", NullValueHandling = NullValueHandling.Ignore)]
-    VisitedSystem[]? VisitedSystems = null)
+    VisitedSystem[]? VisitedSystems = null,
+    [property: JsonProperty("barReservations", NullValueHandling = NullValueHandling.Ignore)] BrokerReservation[]? BarReservations = null)
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     /// <summary>Shared Newtonsoft settings for read/write of sidecar JSON.
     /// <see cref="TypeNameHandling.Auto"/> is required because

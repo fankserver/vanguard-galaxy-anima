@@ -300,7 +300,8 @@ public class Plugin : BaseUnityPlugin
             SidecarIO.Write(sidecarPath, new SidecarSchema(
                 Version:        SidecarSchema.CurrentVersion,
                 Entries:        entries,
-                VisitedSystems: visited.Length == 0 ? null : visited));
+                VisitedSystems: visited.Length == 0 ? null : visited,
+                BarReservations: PersistedRegistry.BarReservations.Count == 0 ? null : System.Linq.Enumerable.ToArray(PersistedRegistry.BarReservations)));
             Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {visited.Length} visited to {sidecarPath}");
         }
         catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }

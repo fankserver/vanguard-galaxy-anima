@@ -642,7 +642,7 @@ internal static class BarRefreshPatches
             {
                 if (story.Mission == null) return;
                 newPatron.description = DescriptionForIntent(story.Mission.Steps[0].Intent);
-                if (plugin.ManagedBars?.Place(newPatron, station) != true)
+                if (plugin.ManagedBars?.Reserve(newPatron, station) != true)
                 {
                     Plugin.Log.LogWarning("Managed broker placement refused before mission assignment.");
                     return;
@@ -738,6 +738,7 @@ internal static class BarRefreshPatches
                     stationId:   station.guid));
             if (!plugin.ManagedBarsSelected) bar.availablePatrons.Add(newPatron);
             committed = true;
+            if (managedPlaced) plugin.ManagedBars?.Commit(candidateSeed);
 
             Plugin.Log.LogInfo(
                 $"Added LLM-authored broker '{newPatron.name}' to bar at '{station.name}' " +
@@ -758,7 +759,7 @@ internal static class BarRefreshPatches
             // the patron is either in bar.availablePatrons (upstream
             // idempotency check handles subsequent attempts) or nowhere
             // (the slot is free for a fresh injection).
-            if (managedPlaced && !committed && plugin.ManagedBars?.Remove(candidateSeed) != true)
+            if (managedPlaced && !committed && plugin.ManagedBars?.Rollback(candidateSeed, station.guid) != true)
                 Plugin.Log.LogWarning("Managed broker rollback was refused; retained state must be reconciled before reuse.");
             ReleaseInjection(station.guid);
         }
