@@ -170,7 +170,15 @@ internal static class SalesmanPatches
             if (Plugin.Instance is not { } plugin) return;
 
             var bar = record.Station?.bar;
-            var removed = bar != null && bar.availablePatrons.Remove(patron);
+            var removed = plugin.ManagedBarsSelected
+                ? plugin.ManagedBars?.Remove(patron.seed) == true
+                : bar != null && bar.availablePatrons.Remove(patron);
+            if (plugin.ManagedBarsSelected && !removed)
+            {
+                Plugin.Log.LogWarning("Managed broker retirement refused; keeping its behavior until removal is safe.");
+                return;
+            }
+            plugin.Registry.Remove(patron);
 
             foreach (var (speaker, text) in record.WarmedLines)
                 plugin.Vgtts.DropCache(speaker, text);

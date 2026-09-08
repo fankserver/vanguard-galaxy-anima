@@ -21,7 +21,7 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
-[BepInDependency(ModApi.PluginId, "0.1.9")]
+[BepInDependency(ModApi.PluginId, "0.1.25")]
 [BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
@@ -62,6 +62,8 @@ public class Plugin : BaseUnityPlugin
     internal MissionJournal.VgMissionJournalBridge MissionJournalBridge { get; private set; } = null!;
 
     private Harmony _harmony = null!;
+    internal bool ManagedBarsSelected { get; private set; }
+    internal ManagedBrokerRosters? ManagedBars { get; private set; }
     private Harmony? _loadSafetyHarmony;
     private float _nextCapabilityCheck;
     private MissionEventObserver? _missionObserver;
@@ -172,6 +174,12 @@ public class Plugin : BaseUnityPlugin
         _loadSafetyHarmony.PatchAll(typeof(MissionLookupPatch));
         _loadSafetyHarmony.PatchAll(typeof(SaveLoadPatch));
 
+        ManagedBarsSelected = ModApi.Bars != null;
+        if (ManagedBarsSelected)
+        {
+            try { ManagedBars = new ManagedBrokerRosters(ModApi.Bars!, this); }
+            catch (Exception error) { Log.LogError("Managed bar provider unavailable: " + error); StopProvider(); return; }
+        }
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
@@ -310,6 +318,7 @@ public class Plugin : BaseUnityPlugin
         _stopped = true; _active = false; enabled = false;
         SaveWritePatch.Registry = null;
         Application.quitting -= OnAppQuitting;
+        Cleanup(() => ManagedBars?.Dispose());
         Cleanup(() => _missionObserver?.Dispose());
         StopVisitRecording();
         Cleanup(() => _harmony?.UnpatchSelf());
