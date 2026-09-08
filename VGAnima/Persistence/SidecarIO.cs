@@ -37,7 +37,8 @@ internal sealed class SidecarIO
         try { schema = JsonConvert.DeserializeObject<SidecarSchema>(raw, SidecarSchema.SerializerSettings); }
         catch (JsonException) { return Quarantine(sidecarPath, SidecarReadStatus.Corrupted); }
 
-        if (schema is null) return Quarantine(sidecarPath, SidecarReadStatus.Corrupted);
+        if (schema is null || schema.Entries == null || schema.Entries.Any(entry => entry == null))
+            return Quarantine(sidecarPath, SidecarReadStatus.Corrupted);
         if (schema.Version == SidecarSchema.CurrentVersion && schema.BarReservations is { } reservations &&
             (reservations.Length > 32 || reservations.Any(row => row == null || string.IsNullOrWhiteSpace(row.Seed)
                 || string.IsNullOrWhiteSpace(row.StationId)) || reservations.Select(row => row.Seed).Distinct(StringComparer.Ordinal).Count() != reservations.Length))
@@ -50,7 +51,12 @@ internal sealed class SidecarIO
         if (schema.Version is 3 or 4)
             return new SidecarReadResult(
                 SidecarReadStatus.Loaded,
-                schema with { Version = SidecarSchema.CurrentVersion },
+                schema with
+                {
+                    Version = SidecarSchema.CurrentVersion,
+                    BarReservations = null,
+                    Entries = schema.Entries.Select(entry => entry with { BarRetirementPending = false }).ToArray()
+                },
                 null);
         return Quarantine(sidecarPath, SidecarReadStatus.UnsupportedVersion);
     }
