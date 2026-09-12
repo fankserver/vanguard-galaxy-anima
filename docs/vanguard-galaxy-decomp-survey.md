@@ -571,10 +571,10 @@ Known vanilla-set flags: `"PuppeteersNameChange"` (`Source.Galaxy.Factions/Puppe
 ### GameplayType (used to disambiguate activity)
 
 ```csharp
-enum GameplayType { Generic, Combat, Mining, Salvage, Cargo }
+enum GameplayType { Generic, Combat, Mining, Salvage, Cargo, Repair }
 ```
 
-(`Source.Util/GameplayType.cs:3-10`) — attached to ships via `SpaceShipRoleType.GetGameplayType()`, to mission generators via `GetMissionType()`, and to station facility offerings. Maps naturally to journal "activity archetype" tracking.
+(`Source.Util/GameplayType.cs:3-10`) — attached to ships via `SpaceShipRoleType.GetGameplayType()`, to mission generators via `GetMissionType()`, and to station facility offerings. Maps naturally to journal "activity archetype" tracking. The shipping assembly adds a 6th member, `Repair`, that the earlier survey omitted; it covers repair-station facility offerings / repair work, alongside the five documented labels.
 
 ### Mission board refresh
 
