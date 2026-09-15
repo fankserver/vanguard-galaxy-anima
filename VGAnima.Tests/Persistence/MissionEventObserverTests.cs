@@ -22,9 +22,9 @@ public sealed class MissionEventObserverTests
         public ServiceAvailability Availability => ServiceAvailability.Available;
         public event Action<ServiceAvailability>? AvailabilityChanged { add { } remove { } }
         public IServiceStatus IdentityContinuity { get; } = new StatusOk();
-        internal void Send(Guid instance, MissionTransitionKind kind, string id = Id)
+        internal void Send(Guid instance, MissionTransitionKind kind, string id = Id, string? definitionId = null)
         {
-            var snapshot = new MissionSnapshot(Session, instance, id, "mission", Array.Empty<string>(), kind == MissionTransitionKind.Accepted);
+            var snapshot = new MissionSnapshot(Session, instance, definitionId ?? id, "mission", Array.Empty<string>(), kind == MissionTransitionKind.Accepted);
             _storyIds[snapshot] = id;
             Transitioned?.Invoke(new MissionTransition(kind, snapshot, ++_sequence));
         }
@@ -130,5 +130,18 @@ public sealed class MissionEventObserverTests
         Assert.Equal(PersistedEntryStates.Offered, registry.Get(Id)!.State);
         events.RaiseUnresolvable(Guid.NewGuid(), MissionTransitionKind.Removed);
         Assert.NotNull(registry.Get(Id));
+    }
+
+    [Fact]
+    public void OwnershipComesFromTheResolvedNativeStoryIdNotTheDefinitionId()
+    {
+        // The published DefinitionId is opaque API state; only the native
+        // Mission resolved during dispatch carries the Anima storyId. A
+        // regression that string-matched DefinitionId (even while still
+        // calling TryGetNative) would fail this test.
+        var events = new Events(); var registry = new PersistedBrokerRegistry(); registry.Add(Entry());
+        using var observer = new MissionEventObserver(events, registry);
+        events.Send(Guid.NewGuid(), MissionTransitionKind.Accepted, definitionId: "opaque-42");
+        Assert.Equal(PersistedEntryStates.Accepted, registry.Get(Id)!.State);
     }
 }

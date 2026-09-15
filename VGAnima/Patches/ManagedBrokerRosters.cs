@@ -67,7 +67,15 @@ internal sealed class ManagedBrokerRosters : IDisposable
         // not an API save registration; no save prerequisite gates placements.
         var result = api.AcquireProvider(plugin, saveData: null);
         _provider = result.Provider ?? throw new InvalidOperationException("Bar provider refused: " + result.Status + " " + result.Detail);
-        api.RosterFinalized += OnRosterFinalized;
+        try { api.RosterFinalized += OnRosterFinalized; }
+        catch
+        {
+            // Never leak an owned provider when setup fails: the API keeps
+            // acquired providers for the process and reattachment needs a
+            // restart.
+            try { _provider.Dispose(); } catch { }
+            throw;
+        }
     }
 
     private bool ApiAvailable
@@ -200,11 +208,7 @@ internal sealed class ManagedBrokerRosters : IDisposable
     private void Revoke(string seed)
     {
         var local = LocalId(seed);
-        if (_contacts.TryGetValue(local, out var contact))
-        {
-            SafeDispose(contact.Definition);
-            _contacts.Remove(local);
-        }
+        if (_contacts.TryGetValue(local, out var contact)) SafeDisposeAndRemove(local, contact);
     }
     internal bool Rollback(string seed, string station)
     {
@@ -212,6 +216,13 @@ internal sealed class ManagedBrokerRosters : IDisposable
         _plugin.PersistedRegistry.ReserveBar(reservation);
         return BrokerReservationRecovery.Retry(_plugin.PersistedRegistry, reservation, Revoke, Remove);
     }
+
+    /// <summary>True while a seed is a tracked managed declaration — used by
+    /// the interaction prefix as a defensive local guard against an API
+    /// suppression regression (an owned contact must never open the vanilla
+    /// sale UI).</summary>
+    internal bool OwnsSeed(string? seed) =>
+        seed != null && _contacts.Values.Any(contact => contact.Seed == seed);
 
     /// <summary>Retire a broker: prove absence on the live patron, then
     /// withdraw the declaration. An undeclared seed is already absent. A
@@ -242,9 +253,18 @@ internal sealed class ManagedBrokerRosters : IDisposable
                 return false;
             }
         }
+        SafeDisposeAndRemove(local, contact);
+        return true;
+    }
+
+    /// <summary>Single withdrawal funnel: drop the consumer record and warmed
+    /// TTS lines, dispose the declaration handle, and untrack. Used by every
+    /// path that withdraws a tracked contact.</summary>
+    private void SafeDisposeAndRemove(string local, Contact contact)
+    {
+        DropRecord(_plugin, contact.Actor);
         SafeDispose(contact.Definition);
         _contacts.Remove(local);
-        return true;
     }
 
     /// <summary>Idempotent per-station presentation prep: consumer records,
@@ -274,11 +294,10 @@ internal sealed class ManagedBrokerRosters : IDisposable
                     Plugin.Log.LogInfo(
                         $"Legacy native-mode broker rows at station {station.guid} are left to vanilla roster rollover; " +
                         $"Anima does not mutate the API-owned roster.");
-                if (_contacts.TryGetValue(local, out var stale))
-                {
-                    SafeDispose(stale.Definition);
-                    _contacts.Remove(local);
-                }
+                // Withdraw any tracked managed duplicate only with proven
+                // absence; until then skip the station entry (the click guard
+                // keeps it inert) so no live handle is dropped unproven.
+                if (_contacts.ContainsKey(local) && !Remove(entry.Broker.Seed)) continue;
                 if (!plugin.Registry.TryGet(native, out _))
                     RegisterRecord(plugin, native, entry, station);
                 continue;

@@ -95,6 +95,9 @@ Vanilla's `Mining` objective class is a misnomer — it's actually a polymorphic
 - `docs/vanguard-galaxy-decomp-survey.md` — historical identifiers harvested from an older `Assembly-CSharp.dll`; verify against the current target before reuse.
 - `docs/vanguard-galaxy-wiki-survey.md` — display-name + lore counterpart.
 - `docs/vanguard-galaxy-bar-ecosystem-survey.md` — bar patron / salesman taxonomy.
+- `docs/mission-events.md` — API-owned witnessed mission lifecycle, ownership correlation, sidecar interactions, fault handling, legacy sidecar limitations.
+- `docs/travel-events.md` — optional witnessed travel session binding, exact visit semantics, failure behavior.
+- `docs/bar-rosters.md` — managed bar contacts on `ModApi.Services.Bars`: provider lifetime, observation-only roster callbacks, proven-absence retirement, dialogue dispatch, native-fallback mode.
 - `docs/npc-interaction-ideas.md`, `docs/special-quest-ideas.md` — design sketches, forward-looking (not authoritative for shipped behavior).
 
 ## Decompiling vanilla

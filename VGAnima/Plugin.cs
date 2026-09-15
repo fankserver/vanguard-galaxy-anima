@@ -92,18 +92,27 @@ public class Plugin : BaseUnityPlugin
     }
 
     /// <summary>Witnessed mission transitions additionally require available
-    /// session tracking (the mission adapter binds on it).</summary>
+    /// session tracking (the mission adapter binds on it). Root member access
+    /// itself is guarded: post-shutdown references must report unavailable,
+    /// never throw into Update polling or the quit flush.</summary>
     private bool MissionApiAvailable
     {
         get
         {
-            var s = ServicesOrNull;
-            return s != null && Available(s.Missions) && Available(s.Lifecycle.SessionTracking);
+            try
+            {
+                var s = ServicesOrNull;
+                return s != null && Available(s.Missions) && Available(s.Lifecycle.SessionTracking);
+            }
+            catch { return false; }
         }
     }
     /// <summary>Optional and off by default in the API ([Travel] Enabled).
     /// Visit recording exists only while it is true; there is no travel-hook fallback.</summary>
-    private bool TravelApiAvailable => Available(ServicesOrNull?.Travel);
+    private bool TravelApiAvailable
+    {
+        get { try { return Available(ServicesOrNull?.Travel); } catch { return false; } }
+    }
     /// <summary>True only while witnessed arrivals are actually being recorded.
     /// When false the visit map is preserved but never pitched: <c>regionally_known</c>
     /// is omitted rather than describing the player with stale counts.</summary>

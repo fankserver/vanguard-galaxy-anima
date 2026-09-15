@@ -33,15 +33,29 @@ internal static class SalesmanPatches
 {
     // Managed API contacts invoke authored dialogue through the retained Anima record;
     // an absent record must never fall through to an unrelated native sale.
-    internal static void InteractOwned(Salesman patron) => _ = InteractWithPatron_Prefix(patron);
+    internal static void InteractOwned(Salesman patron) => _ = InteractInternal(patron, fromNativeClick: false);
 
     [HarmonyPrefix]
     [HarmonyPatch(nameof(Salesman.InteractWithPatron))]
-    private static bool InteractWithPatron_Prefix(Salesman __instance)
+    private static bool InteractWithPatron_Prefix(Salesman __instance) => InteractInternal(__instance, fromNativeClick: true);
+
+    private static bool InteractInternal(Salesman __instance, bool fromNativeClick)
     {
         try
         {
             if (Plugin.Instance is not { } plugin) return true;
+            // Defensive local guard (managed mode): the API suppresses
+            // InteractWithPatron for its owned contacts and dispatches our
+            // Register callback instead. If that suppression ever regresses,
+            // a tracked managed seed must still never open the vanilla sale UI.
+            if (fromNativeClick && plugin.ManagedBarsSelected
+                && plugin.ManagedBars?.OwnsSeed(__instance.seed) == true)
+            {
+                Plugin.Log.LogDebug(
+                    $"'{__instance.name}' native interaction on an API-owned managed contact suppressed locally; " +
+                    "expected Register-callback dispatch.");
+                return false;
+            }
             if (!plugin.Registry.TryGet(__instance, out var record)) return true;
 
             var state = BrokerStateDetector.Detect(record.StoryId, plugin.PlayerView);
