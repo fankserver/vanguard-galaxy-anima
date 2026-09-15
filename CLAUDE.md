@@ -34,7 +34,7 @@ Run `make refresh-test-asm` once against the inspected installed game, then `mak
 Three DLLs are **symlinked** into `VGAnima/lib/` by the Makefile, not committed:
 
 - `Assembly-CSharp.dll` — owner-local stripped/publicized reference generated with `make refresh-asm`; `make link-asm` checks source/reference hashes. See `docs/current-game-compatibility.md` for the exact inspected build. Never commit the generated DLL or private receipts.
-- `VGModAPI.Abstractions.dll` — compile-only reference; API 0.1.25–0.1.x is a hard runtime dependency with mission events enabled. Travel events are an additional opt-in (`[Travel] Enabled`) that only the system-visit feature needs. `make link-api`; override `VGAPI_DLL` for isolated worktrees. Never deploy the API assembly inside Anima's folder.
+- `VGModAPI.Abstractions.dll` — compile-only reference; API 0.2.8+ (0.2.x pre-1.0 service-root line) is a hard runtime dependency with mission events enabled; the BepInEx dependency floor carries the version and typed service `Availability` carries health (no runtime exact-minor gate). Travel events are an additional opt-in (`[Travel] Enabled`) that only the system-visit feature needs. `make link-api`; override `VGAPI_DLL` for isolated worktrees. Never deploy the API assembly inside Anima's folder.
 - `VGMissionJournal.dll` — typed soft-dep on the sibling mod. Resolved from `../vanguard-galaxy-missionjournal/VGMissionJournal/bin/Release/...`. The game loads it as its own plugin at runtime; we only need compile-time types. `make link-missionjournal`.
 
 If `VGMissionJournal.dll` is missing or stale (API drift), the soft-dep lookup in `VgMissionJournalBridge` falls back to an empty-query stub at runtime, but *compilation* will fail. Rebuild the sibling first.
@@ -52,7 +52,7 @@ The end-to-end flow when the player walks into a bar:
 
 ### System visits
 
-`Persistence/SystemVisitObserver` consumes `ModApi.Travel` (public contracts only) and counts a visit exactly when a witnessed `Arrived` fact in `JumpGate`/`Wormhole` mode lands in a system other than the latched one. It uses `ActualLocation`, never `RequestedDestination`, and `TravelTransition.GameSeconds` as the visit time. Placements seed identity without counting; requests/departures/cancels/route completion/in-system arrivals count nothing. The travel group is opt-in and off by default: when it is unavailable or the observer stops, recorded history is preserved but `regionally_known` is omitted from prompts, and mission authoring is unaffected. There is no `JumpToSystem` fallback. See `docs/travel-events.md`.
+`Persistence/SystemVisitObserver` consumes `ModApi.Services.Travel` (`ITravelService.Transitioned`; public contracts only) and counts a visit exactly when a witnessed `Arrived` fact in `JumpGate`/`Wormhole` mode lands in a system other than the latched one. It uses `ActualLocation`, never `RequestedDestination`, and `TravelTransition.GameSeconds` as the visit time. Placements seed identity without counting; requests/departures/cancels/route completion/in-system arrivals count nothing. The travel group is opt-in and off by default: when it is unavailable or the observer stops, recorded history is preserved but `regionally_known` is omitted from prompts, and mission authoring is unaffected. There is no `JumpToSystem` fallback. See `docs/travel-events.md`.
 
 ### Mission lifecycle
 
@@ -62,7 +62,7 @@ The end-to-end flow when the player walks into a bar:
 
 There are **two** sources of mission history the LLM sees:
 
-- **In-flight (offered + accepted)** missions live in VGAnima's own `PersistedBrokerRegistry`, persisted to a sidecar `<save>.save.vganima.json` (schema **v5**). `SaveWritePatch` + `SaveLoadPatch` flush/rehydrate around vanilla save ops.
+- **In-flight (offered + accepted)** missions live in VGAnima's own `PersistedBrokerRegistry`, persisted to a sidecar `<save>.save.vganima.json` (schema **v5**). The sidecar publishes only on a witnessed `Lifecycle` `SaveSucceeded` (destination-authoritative; skipped/failed saves never publish) plus the `ApplicationQuit` safety net, and `SaveLoadPatch`'s retained pre-deserialization prefix rehydrates around vanilla load.
 - **Resolved (completed/failed/abandoned)** missions live in the sibling mod **VGMissionJournal** and are queried through `VgMissionJournalBridge` (typed soft-dep). VGAnima used to keep its own completed-mission log; that was retired in MJ-T4 because VGMissionJournal records *all* terminations (vanilla + VGAnima) in a richer form.
 
 `JournalContextBuilder` composes the four prompt windows (`local` / `network` / `rumors` / `active`) by combining both sources; the reach model in `MagnitudeReachFormula` decides which resolved records the current broker plausibly knows about (distance-attenuated with age + magnitude + fame).

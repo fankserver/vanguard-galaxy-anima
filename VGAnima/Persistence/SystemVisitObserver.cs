@@ -4,7 +4,7 @@ using VGModAPI;
 
 namespace VGAnima.Persistence;
 
-/// <summary>Records per-system visits from witnessed <see cref="ITravelEvents"/>
+/// <summary>Records per-system visits from witnessed <see cref="ITravelService"/>
 /// arrivals. Replaces the retired <c>TravelManager.JumpToSystem</c> Harmony
 /// prefix, which recorded a <em>requested</em> destination before the jump
 /// coroutine had proven anything.
@@ -31,10 +31,9 @@ namespace VGAnima.Persistence;
 /// already holds instead of forcing a lazy vanilla name lookup.</para></summary>
 internal sealed class SystemVisitObserver : IDisposable
 {
-    private readonly ITravelEvents _events;
+    private readonly ITravelService _service;
     private readonly PersistedBrokerRegistry _registry;
     private readonly Action<Exception>? _failed;
-    private readonly IDisposable _subscription;
     /// <summary>Legs already accounted for in the current session. Cleared on
     /// session replacement and slot load, so it is bounded by the travel legs
     /// of one session.</summary>
@@ -53,20 +52,19 @@ internal sealed class SystemVisitObserver : IDisposable
     /// pitching stale visit counts.</summary>
     internal bool IsRecording => !_disposed && !Faulted;
 
-    private SystemVisitObserver(ITravelEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed)
-    { _events = events; _registry = registry; _failed = failed; _subscription = events.Subscribe("vganima", Receive); }
+    private SystemVisitObserver(ITravelService service, PersistedBrokerRegistry registry, Action<Exception>? failed)
+    { _service = service; _registry = registry; _failed = failed; _service.Transitioned += Receive; }
 
-    /// <summary>Subscribes to the travel service, or returns null when the
-    /// provider refuses the subscription (disposed hub, off-main-thread
-    /// installation, rejected owner). A binding failure degrades visit
-    /// recording only: it is reported through <paramref name="bindingFailed"/>
-    /// and never propagates into the caller's own startup, so the mission
-    /// provider and the load safeguards stay alive and no legacy travel hook is
-    /// installed instead.</summary>
-    internal static SystemVisitObserver? TryBind(ITravelEvents events, PersistedBrokerRegistry registry,
+    /// <summary>Subscribes to the travel service, or returns null when event
+    /// registration is refused (API stopped, off-main-thread installation).
+    /// A binding failure degrades visit recording only: it is reported through
+    /// <paramref name="bindingFailed"/> and never propagates into the caller's
+    /// own startup, so the mission provider and the load safeguards stay alive
+    /// and no legacy travel hook is installed instead.</summary>
+    internal static SystemVisitObserver? TryBind(ITravelService service, PersistedBrokerRegistry registry,
         Action<Exception>? failed, Action<Exception> bindingFailed)
     {
-        try { return new SystemVisitObserver(events, registry, failed); }
+        try { return new SystemVisitObserver(service, registry, failed); }
         catch (Exception error) { bindingFailed(error); return null; }
     }
 
@@ -90,7 +88,7 @@ internal sealed class SystemVisitObserver : IDisposable
     {
         // Foreign or stale evidence (including anything queued for a replaced
         // session) can never mutate the current registry.
-        if (_events.SessionId != transition.SessionId) return;
+        if (_service.SessionId != transition.SessionId) return;
         if (_session != transition.SessionId) { _session = transition.SessionId; _currentSystemId = null; _lastSequence = 0; _countedLegs.Clear(); }
         if (transition.Sequence <= _lastSequence) return;
         _lastSequence = transition.Sequence;
@@ -125,6 +123,6 @@ internal sealed class SystemVisitObserver : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true; _subscription.Dispose(); _countedLegs.Clear();
+        _disposed = true; _service.Transitioned -= Receive; _countedLegs.Clear();
     }
 }

@@ -1,6 +1,6 @@
 # System-visit recording from travel events (0.4.0)
 
-Requires VGModAPI 0.1.9–0.1.x. The API's travel group is **experimental and opt-in**: system visits are recorded only while `[Travel] Enabled = true` in `BepInEx/config/vgmodapi.cfg` and the `native-travel` capability reports available. Anima consumes `ModApi.Travel` public contracts only (`ITravelEvents`, `TravelTransition`, `TravelLocation`, `TravelTransitionKind`, `TravelMode`). The former `TravelManager.JumpToSystem` Harmony prefix is removed; there is no travel-hook fallback and no silent re-installation on fault.
+Requires VGModAPI 0.2.8+. The API's travel group is **experimental and opt-in**: system visits are recorded only while `[Travel] Enabled = true` in `BepInEx/config/vgmodapi.cfg` and `ModApi.Services.Travel` reports `Availability.IsAvailable`. Anima consumes `ITravelService` public contracts only (`Transitioned` event, `TravelTransition`, `TravelLocation`, `TravelTransitionKind`, `TravelMode`) and unsubscribes the exact handler on teardown. The former `TravelManager.JumpToSystem` Harmony prefix is removed; there is no travel-hook fallback and no silent re-installation on fault.
 
 ## What counts as a visit
 

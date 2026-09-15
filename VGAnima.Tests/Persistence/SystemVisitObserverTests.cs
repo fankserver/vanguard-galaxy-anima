@@ -6,35 +6,23 @@ using Xunit;
 
 namespace VGAnima.Tests.Persistence;
 
-/// <summary>Consumer semantics against a true public <see cref="ITravelEvents"/>
+/// <summary>Consumer semantics against a true public <see cref="ITravelService"/>
 /// double. Nothing here touches vanilla travel types: the observer sees only
 /// the API's published facts.</summary>
 public sealed class SystemVisitObserverTests
 {
-    private sealed class TravelEventsDouble : ITravelEvents
+    private sealed class TravelEventsDouble : ITravelService
     {
-        private readonly List<Action<TravelTransition>> _callbacks = new();
         private long _sequence;
         public Guid? SessionId { get; set; } = Guid.NewGuid();
         public TravelLocation? CurrentLocation { get; private set; }
         public bool IsDispatchingCallbacks { get; private set; }
         internal Action<TravelTransition>? BeforeDispatch;
-
-        private sealed class Subscription : IDisposable
-        {
-            private readonly TravelEventsDouble _events;
-            private readonly Action<TravelTransition> _callback;
-            internal Subscription(TravelEventsDouble events, Action<TravelTransition> callback)
-            { _events = events; _callback = callback; }
-            public void Dispose() => _events._callbacks.Remove(_callback);
-        }
-
-        public IDisposable Subscribe(string owner, Action<TravelTransition> callback)
-        {
-            Assert.False(string.IsNullOrWhiteSpace(owner));
-            _callbacks.Add(callback);
-            return new Subscription(this, callback);
-        }
+        public event Action<TravelTransition>? Transitioned;
+        public ServiceAvailability Availability => ServiceAvailability.Available;
+        public event Action<ServiceAvailability>? AvailabilityChanged { add { } remove { } }
+        public TravelRouteResult RequestRoute(string poiId, float speedMultiplier = 1f) =>
+            throw new NotSupportedException("Route requests are not exercised by visit observation tests.");
 
         internal void ReplaceSession()
         {
@@ -71,20 +59,28 @@ public sealed class SystemVisitObserverTests
             try
             {
                 BeforeDispatch?.Invoke(fact);
-                foreach (var callback in _callbacks.ToArray()) callback(fact);
+                Transitioned?.Invoke(fact);
             }
             finally { IsDispatchingCallbacks = false; }
         }
     }
 
-    /// <summary>A travel service that refuses subscriptions, as the real hub
-    /// does after disposal or off the main thread.</summary>
-    private sealed class RefusingTravelEvents : ITravelEvents
+    /// <summary>A travel service that refuses event registration, as the real
+    /// service does after API shutdown or off the main thread.</summary>
+    private sealed class RefusingTravelEvents : ITravelService
     {
         public Guid? SessionId => null;
         public TravelLocation? CurrentLocation => null;
         public bool IsDispatchingCallbacks => false;
-        public IDisposable Subscribe(string owner, Action<TravelTransition> callback) => throw new ObjectDisposedException("TravelEvents");
+        public ServiceAvailability Availability => ServiceAvailability.Available;
+        public event Action<ServiceAvailability>? AvailabilityChanged { add { } remove { } }
+        public TravelRouteResult RequestRoute(string poiId, float speedMultiplier = 1f) =>
+            throw new NotSupportedException();
+        public event Action<TravelTransition>? Transitioned
+        {
+            add => throw new ObjectDisposedException("TravelService");
+            remove { }
+        }
     }
 
     private static TravelLocation Location(string id, string? name = null, string? poi = "poi") =>
@@ -94,11 +90,11 @@ public sealed class SystemVisitObserverTests
         => (new TravelEventsDouble(), new PersistedBrokerRegistry());
 
     /// <summary>Every case goes through the production binding path, so a
-    /// refused subscription is exercised by the same entry point the plugin
-    /// uses.</summary>
-    private static SystemVisitObserver Bind(ITravelEvents events, PersistedBrokerRegistry registry, Action<Exception>? failed = null)
+    /// refused event registration is exercised by the same entry point the
+    /// plugin uses.</summary>
+    private static SystemVisitObserver Bind(ITravelService service, PersistedBrokerRegistry registry, Action<Exception>? failed = null)
     {
-        var observer = SystemVisitObserver.TryBind(events, registry, failed,
+        var observer = SystemVisitObserver.TryBind(service, registry, failed,
             bindingFailed: error => throw new Xunit.Sdk.XunitException("Unexpected binding failure: " + error));
         Assert.NotNull(observer);
         return observer!;

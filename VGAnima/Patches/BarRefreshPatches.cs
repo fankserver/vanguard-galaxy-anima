@@ -21,7 +21,13 @@ using UObject = UnityEngine.Object;
 namespace VGAnima.Patches;
 
 /// <summary>
-/// Bar-level patches on <see cref="Bar.CheckUpdatePatrons"/>:
+/// Bar-level patches on <see cref="Bar.CheckUpdatePatrons"/> — the
+/// NATIVE-FALLBACK roster path, installed only when the Bars service was
+/// unavailable at startup selection. In managed mode both hooks early-return:
+/// rehydrate, orphan purge and chance dispatch run from
+/// <see cref="ManagedBrokerRosters.DrainPending"/> on the plugin Update pump,
+/// fed by the API's <c>RosterFinalized</c> observation (never inside that
+/// callback), and contact membership is API-owned.
 ///   1. Prefix snapshots the pre-refresh patron roster and pins brokers whose
 ///      mission is still active (so daily rollover doesn't delete them).
 ///   2. Postfix re-inserts pinned brokers, evicts rolled-off ones, and kicks
@@ -130,16 +136,14 @@ internal static class BarRefreshPatches
     {
         try
         {
-            if (Plugin.Instance is { ManagedBarsSelected: true } managedPlugin)
-            {
-                var managedStation = Traverse.Create(__instance).Field<SpaceStation>("spaceStation").Value;
-                if (managedStation != null && SpaceStation.current == managedStation)
-                {
-                    managedPlugin.ManagedBars?.Rehydrate(managedPlugin, managedStation);
-                    StartInjectMissionBroker(__instance);
-                }
-                return;
-            }
+            // Managed mode does not use the native refresh hook for roster work:
+            // rehydrate, orphan purge and chance dispatch run from
+            // ManagedBrokerRosters.DrainPending on the plugin Update pump, fed
+            // by Bars.RosterFinalized (never mutated inside that callback).
+            // This prefix/postfix pair is the native-fallback implementation
+            // used only when the Bars service was unavailable at startup
+            // selection.
+            if (Plugin.Instance is { ManagedBarsSelected: true }) return;
             // Restore pinned brokers before eviction + injection so idempotency
             // sees them and the rolloff diff doesn't include them.
             if (_pinnedBrokers.TryGetValue(__instance, out var pinned))
@@ -228,6 +232,18 @@ internal static class BarRefreshPatches
         }
     }
 
+    /// <summary>Managed-mode entry point: invoked by
+    /// <see cref="ManagedBrokerRosters.DrainPending"/> on the plugin Update
+    /// pump after a finalized roster observation for the station the player
+    /// is docked at. Runs the same chance-roll → LLM pipeline as the
+    /// fallback postfix; registration of the resulting contact happens
+    /// outside any API callback dispatch.</summary>
+    internal static void DispatchManagedStationRefresh(Plugin plugin, SpaceStation station)
+    {
+        if (plugin == null || station?.bar == null) return;
+        StartInjectMissionBroker(station.bar);
+    }
+
     /// <summary>Preflight checks + fire the async LLM → main-thread-continuation
     /// pipeline per spec §11. Returns immediately; the broker appears (or
     /// doesn't) ~2-3s later when the continuation lands.</summary>
@@ -305,14 +321,22 @@ internal static class BarRefreshPatches
         var barUI = UObject.FindAnyObjectByType<BarUI>();
         if (barUI == null)
         {
-            Plugin.Log.LogDebug("BarUI not in scene yet; deferring broker injection");
-            return;
+            if (plugin.ManagedBarsSelected)
+            {
+                // Managed seating is API-owned; BarUI presence is irrelevant
+                // to declaring a contact.
+            }
+            else
+            {
+                Plugin.Log.LogDebug("BarUI not in scene yet; deferring broker injection");
+                return;
+            }
         }
 
-        var sprites = Traverse.Create(barUI)
-            .Field<List<BarPatronSprite>>("patronSprites")
-            .Value;
-        if (sprites == null || sprites.Count == 0)
+        var sprites = barUI != null
+            ? Traverse.Create(barUI).Field<List<BarPatronSprite>>("patronSprites").Value
+            : null;
+        if (!plugin.ManagedBarsSelected && (sprites == null || sprites.Count == 0))
         {
             Plugin.Log.LogWarning("BarUI.patronSprites empty; aborting injection");
             return;
@@ -380,20 +404,25 @@ internal static class BarRefreshPatches
         var newPatron = new Salesman(candidateSeed, station);
         newPatron.Initialize();
 
-        var genderSeats = sprites
-            .Where(s => s.isMale == newPatron.isMale)
-            .Select(s => s.seatIndex)
-            .Distinct()
-            .ToList();
-        if (genderSeats.Count == 0)
+        // Native-fallback seating: the managed path lets the API assign
+        // seats at contribution admission.
+        if (!plugin.ManagedBarsSelected && sprites != null)
         {
-            Plugin.Log.LogWarning($"No patronSprites for isMale={newPatron.isMale}; aborting");
-            ReleaseInjection(station.guid);
-            return;
+            var genderSeats = sprites
+                .Where(s => s.isMale == newPatron.isMale)
+                .Select(s => s.seatIndex)
+                .Distinct()
+                .ToList();
+            if (genderSeats.Count == 0)
+            {
+                Plugin.Log.LogWarning($"No patronSprites for isMale={newPatron.isMale}; aborting");
+                ReleaseInjection(station.guid);
+                return;
+            }
+            var usedByAny = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
+            var freeSeats = genderSeats.Where(s => !usedByAny.Contains(s)).ToList();
+            newPatron.seat = freeSeats.Count > 0 ? freeSeats[0] : genderSeats[0];
         }
-        var usedByAny = new HashSet<int>(bar.availablePatrons.Select(p => p.seat));
-        var freeSeats = genderSeats.Where(s => !usedByAny.Contains(s)).ToList();
-        newPatron.seat = freeSeats.Count > 0 ? freeSeats[0] : genderSeats[0];
 
         var brokerInfo = new BrokerInfo(
             Name:           newPatron.name,

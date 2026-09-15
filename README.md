@@ -6,7 +6,7 @@ VGTTS voices the dialogue if installed.
 
 ## Install
 
-1. Install **VGModAPI 0.1.32–0.1.x** separately (currently a development build), and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
+1. Install **VGModAPI 0.2.8+** (0.2.x line; currently a development build) separately, and enable `[Missions] Enabled = true` in `BepInEx/config/vgmodapi.cfg`. Mission events remain experimental: use disposable saves until qualified. Optionally also enable `[Travel] Enabled = true` — without it Anima records no system visits and omits `regionally_known` from prompts (see [travel events](docs/travel-events.md)). VGTTS is optional; without it dialogue runs silent.
 2. Drop `VGAnima.dll` into `<game>/BepInEx/plugins/VGAnima/`. Do not copy game DLLs or the API's assemblies into this folder; the API owns its installation.
 3. Edit `BepInEx/config/vganima.cfg` (auto-generated on first launch — see below) and set an LLM endpoint.
 4. Launch the game. An `Anima` boot line shows up in `BepInEx/LogOutput.log`.
@@ -16,7 +16,7 @@ VGTTS voices the dialogue if installed.
 Prerequisites:
 
 - Inspected game installation and `assembly-publicizer`: run `make refresh-asm` and `make refresh-test-asm` once to generate private compile/test references. See [current compatibility](docs/current-game-compatibility.md).
-- Release builds of sibling VGModAPI (0.1.32) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
+- Release builds of sibling VGModAPI (0.2.8+) and VGMissionJournal. Override `VGAPI_DLL` / `VGMISSIONJOURNAL_DLL` for isolated worktrees.
 - `dotnet` SDK on PATH, or a pre-staged install at `/tmp/dnsdk/dotnet/dotnet`.
 
 ```bash
@@ -34,7 +34,7 @@ Version 0.3.0 replaced five direct mission lifecycle hooks with witnessed API ev
 
 Missing/disabled/incompatible API prevents startup. Later capability loss stops authoring, observation and save writes until restart, while retaining load/lookup safeguards for existing content; late LLM results cannot publish into another session. See [the event contract and limits](docs/mission-events.md).
 
-This is **not** an Anima save-data migration. Versions 3 and 4 of `.save.vganima.json` are readable; writes use version 5 with managed-bar cleanup metadata. Factory/lookup hooks and best-effort save/quit behavior remain. They are not exact-snapshot API-managed storage and carry no cross-file atomicity or failed-save rollback guarantee. Back up the vanilla save and paired sidecar together. No prompt schema or mission economics changed.
+This is **not** an Anima save-data migration. Versions 3 and 4 of `.save.vganima.json` are readable; writes use version 5 with managed-bar cleanup metadata. Factory/lookup hooks and the witnessed-success save/quit flush behavior remain (the flush itself now comes from the API's `SaveSucceeded` lifecycle fact rather than a `SaveGame.Store` postfix). They are not exact-snapshot API-managed storage and carry no cross-file atomicity or failed-save rollback guarantee. Back up the vanilla save and paired sidecar together. No prompt schema or mission economics changed.
 
 ## Config (`BepInEx/config/vganima.cfg`)
 
@@ -118,7 +118,7 @@ Any validation failure → no broker is injected, full system/user/raw-response 
 
 Resolved-mission history lives in the sibling mod **VGMissionJournal** (its own sidecar). VGAnima used to keep a rolling 50-entry completed-mission log in-sidecar; that was retired in v4 because VGMissionJournal records *all* mission terminations (vanilla + VGAnima) in a richer, queryable form. See `MJ-T4` notes in the commit history.
 
-A Harmony postfix on `SaveGame.Store` flushes the in-memory registry to the sidecar after vanilla's own save succeeds; a prefix on `SaveGameFile.LoadSaveGame` reads the sidecar and registers rebuild factories *before* vanilla's mission-list deserialization runs. The `ApplicationQuit` safety net flushes pending state when the player closes the game mid-session. Orphan purge runs during the first post-load bar refresh, dropping entries whose storyIds left vanilla's mission lists or whose brokers left the bar.
+A witnessed `SaveSucceeded` lifecycle event from VGModAPI (`ModApi.Services.Lifecycle`, carrying the normalized destination path) flushes the in-memory registry to the sidecar — skipped and failed saves never publish, which the retired `SaveGame.Store` postfix could not distinguish. A Harmony prefix on `SaveGameFile.LoadSaveGame` (a retained, endorsed pre-deserialization hook) reads the sidecar and registers rebuild factories *before* vanilla's mission-list deserialization runs. The `ApplicationQuit` safety net flushes pending state when the player closes the game mid-session. Orphan purge runs during the first post-load bar refresh in fallback mode, and against finalized roster membership in managed mode, dropping entries whose storyIds left vanilla's mission lists or whose brokers left the bar.
 
 Schema upgrades are transparent: v3 sidecars (before the local mission-log retirement) auto-upgrade to v4 on read — the `completed_missions` field is dropped; `entries` + `visited_systems` carry over intact; written back as v4 on the next save. v2 sidecars (before the visited-systems addition) upgrade through the same path. v1 sidecars (pre-intent-refactor, with deleted objective types) quarantine on load.
 
