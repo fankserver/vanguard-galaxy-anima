@@ -179,8 +179,9 @@ internal sealed class ManagedBrokerRosters : IDisposable
         foreach (var pair in _contacts.ToArray())
         {
             if (plugin.PersistedRegistry.FindBySeed(pair.Value.Seed) != null) continue;
-            if (!Remove(pair.Value.Seed)) continue;
-            DropRecord(plugin, pair.Value.Actor);
+            // Remove's withdrawal funnel already drops the record + warmed
+            // TTS lines once absence is proven.
+            Remove(pair.Value.Seed);
         }
     }
 
