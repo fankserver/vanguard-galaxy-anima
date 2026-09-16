@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Source.MissionSystem;
 using VGAnima.Persistence;
 using VGModAPI;
 using Xunit;
@@ -7,16 +9,44 @@ namespace VGAnima.Tests.Persistence;
 public sealed class MissionEventObserverTests
 {
     private const string Id = "vganima_llm_test";
-    private sealed class Events : IMissionEvents, IDisposable
+    /// <summary>An <see cref="IMissionService"/> double: event-based dispatch
+    /// plus the native escape hatch the production observer uses for ownership
+    /// correlation. Native mission objects are minted read-only per lookup,
+    /// exactly as during real dispatch.</summary>
+    private sealed class Events : IMissionService
     {
-        private Action<MissionTransition>? _receive;
+        private readonly Dictionary<MissionSnapshot, string> _storyIds = new();
         private long _sequence;
         internal Guid Session = Guid.NewGuid();
-        public IDisposable Subscribe(string owner, Action<MissionTransition> callback) { _receive = callback; return this; }
-        internal void Send(Guid instance, MissionTransitionKind kind, string id = Id) => _receive?.Invoke(new MissionTransition(kind,
-            new MissionSnapshot(Session, instance, id, "mission", Array.Empty<string>(), kind == MissionTransitionKind.Accepted), ++_sequence));
-        internal void Malformed() => _receive?.Invoke(null!);
-        public void Dispose() => _receive = null;
+        public event Action<MissionTransition>? Transitioned;
+        public ServiceAvailability Availability => ServiceAvailability.Available;
+        public event Action<ServiceAvailability>? AvailabilityChanged { add { } remove { } }
+        public IServiceStatus IdentityContinuity { get; } = new StatusOk();
+        internal void Send(Guid instance, MissionTransitionKind kind, string id = Id, string? definitionId = null)
+        {
+            var snapshot = new MissionSnapshot(Session, instance, definitionId ?? id, "mission", Array.Empty<string>(), kind == MissionTransitionKind.Accepted);
+            _storyIds[snapshot] = id;
+            Transitioned?.Invoke(new MissionTransition(kind, snapshot, ++_sequence));
+        }
+        /// <summary>Dispatches a snapshot with no resolvable native — the API
+        /// refuses attribution rather than trusting the opaque DefinitionId.</summary>
+        internal void RaiseUnresolvable(Guid instance, MissionTransitionKind kind, string opaqueDefinitionId = Id)
+        {
+            var snapshot = new MissionSnapshot(Session, instance, opaqueDefinitionId, "mission", Array.Empty<string>(), false);
+            Transitioned?.Invoke(new MissionTransition(kind, snapshot, ++_sequence));
+        }
+        internal void Malformed() => Transitioned?.Invoke(null!);
+        public bool TryGetNative(MissionSnapshot snapshot, out object? native)
+        {
+            if (_storyIds.TryGetValue(snapshot, out var storyId)) { native = new Mission { storyId = storyId }; return true; }
+            native = null;
+            return false;
+        }
+        private sealed class StatusOk : IServiceStatus
+        {
+            public ServiceAvailability Availability => ServiceAvailability.Available;
+            public event Action<ServiceAvailability>? AvailabilityChanged { add { } remove { } }
+        }
     }
     private static PersistedEntry Entry() => new(Id, PersistedEntryStates.Offered, null!, new PersistedBroker("seed", "station", null!), new PersistedTimestamps(0, "2026-01-01T00:00:00Z", 0, "2026-01-01T00:00:00Z"));
     [Theory]
@@ -87,5 +117,31 @@ public sealed class MissionEventObserverTests
         var observer = new MissionEventObserver(events, registry);
         events.Send(Guid.NewGuid(), MissionTransitionKind.Accepted, "vanilla"); Assert.Equal(PersistedEntryStates.Offered, registry.Get(Id)!.State);
         observer.Dispose(); events.Send(Guid.NewGuid(), MissionTransitionKind.Accepted); Assert.Equal(PersistedEntryStates.Offered, registry.Get(Id)!.State);
+    }
+    [Fact]
+    public void TransitionsWithoutResolvableNativeAreNeverAttributed()
+    {
+        // The public DefinitionId is opaque; even carrying our prefix shape,
+        // a snapshot whose native cannot be resolved during dispatch must not
+        // move the durable registry.
+        var events = new Events(); var registry = new PersistedBrokerRegistry(); registry.Add(Entry());
+        using var observer = new MissionEventObserver(events, registry);
+        events.RaiseUnresolvable(Guid.NewGuid(), MissionTransitionKind.Accepted);
+        Assert.Equal(PersistedEntryStates.Offered, registry.Get(Id)!.State);
+        events.RaiseUnresolvable(Guid.NewGuid(), MissionTransitionKind.Removed);
+        Assert.NotNull(registry.Get(Id));
+    }
+
+    [Fact]
+    public void OwnershipComesFromTheResolvedNativeStoryIdNotTheDefinitionId()
+    {
+        // The published DefinitionId is opaque API state; only the native
+        // Mission resolved during dispatch carries the Anima storyId. A
+        // regression that string-matched DefinitionId (even while still
+        // calling TryGetNative) would fail this test.
+        var events = new Events(); var registry = new PersistedBrokerRegistry(); registry.Add(Entry());
+        using var observer = new MissionEventObserver(events, registry);
+        events.Send(Guid.NewGuid(), MissionTransitionKind.Accepted, definitionId: "opaque-42");
+        Assert.Equal(PersistedEntryStates.Accepted, registry.Get(Id)!.State);
     }
 }

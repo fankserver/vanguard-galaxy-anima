@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using BepInEx;
 using BepInEx.Logging;
-using BepInEx.Bootstrap;
 using VGModAPI;
 using HarmonyLib;
 using Source.Galaxy.POI.Station;
@@ -21,7 +20,7 @@ namespace VGAnima;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInProcess("VanguardGalaxy.exe")]
-[BepInDependency(ModApi.PluginId, "0.1.32")]
+[BepInDependency(ModApi.PluginId, "0.2.8")]
 [BepInDependency("vgtts",             BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("vgmissionjournal",  BepInDependency.DependencyFlags.SoftDependency)]
 public class Plugin : BaseUnityPlugin
@@ -68,21 +67,71 @@ public class Plugin : BaseUnityPlugin
     private float _nextCapabilityCheck;
     private MissionEventObserver? _missionObserver;
     private SystemVisitObserver? _visitObserver;
+    private ILifecycleService? _lifecycle;
+    private string? _lastSaveDestination;
     private bool _active;
     private bool _stopped;
-    private static bool MissionApiAvailable => ModApi.Missions != null && ModApi.Current?.Capabilities.Any(c => c.Name == "mission-transitions" && c.Available) == true;
+
+    /// <summary>Service root captured once after API bootstrap. The 0.2.x root
+    /// and its services are stable for the API lifetime — never null-check the
+    /// references themselves; typed <see cref="IServiceStatus.Availability"/>
+    /// carries health (there is no capability list). Access via this cached
+    /// reference so post-shutdown reads report stopped state instead of the
+    /// <c>ModApi.Services</c> bootstrap/shutdown throw.</summary>
+    internal ModServices? ServicesOrNull { get; private set; }
+    private static ModServices? SafeServices() { try { return ModApi.Services; } catch (Exception) { return null; } }
+    private static bool Available(IServiceStatus? status) { try { return status?.Availability.IsAvailable == true; } catch { return false; } }
+    private static ServiceAvailability AvailabilityOf(IServiceStatus? status)
+    {
+        try
+        {
+            var availability = status?.Availability;
+            return availability ?? new ServiceAvailability(ServiceUnavailableReason.ApiStopped, "VGModAPI services unavailable");
+        }
+        catch { return new ServiceAvailability(ServiceUnavailableReason.ApiStopped, "VGModAPI services unavailable"); }
+    }
+
+    /// <summary>Witnessed mission transitions additionally require available
+    /// session tracking (the mission adapter binds on it). Root member access
+    /// itself is guarded: post-shutdown references must report unavailable,
+    /// never throw into Update polling or the quit flush.</summary>
+    private bool MissionApiAvailable
+    {
+        get
+        {
+            try
+            {
+                var s = ServicesOrNull;
+                return s != null && Available(s.Missions) && Available(s.Lifecycle.SessionTracking);
+            }
+            catch { return false; }
+        }
+    }
     /// <summary>Optional and off by default in the API ([Travel] Enabled).
     /// Visit recording exists only while it is true; there is no travel-hook fallback.</summary>
-    private static bool TravelApiAvailable => ModApi.Travel != null && ModApi.Current?.Capabilities.Any(c => c.Name == "native-travel" && c.Available) == true;
+    private bool TravelApiAvailable
+    {
+        get { try { return Available(ServicesOrNull?.Travel); } catch { return false; } }
+    }
     /// <summary>True only while witnessed arrivals are actually being recorded.
     /// When false the visit map is preserved but never pitched: <c>regionally_known</c>
     /// is omitted rather than describing the player with stale counts.</summary>
     internal bool VisitHistoryRecording => _active && TravelApiAvailable && _visitObserver?.IsRecording == true;
+    /// <summary>Current witnessed session, independent of provider activity.</summary>
+    internal SessionSnapshot? ObservedSession
+    {
+        get { try { return ServicesOrNull?.Lifecycle.CurrentSession; } catch { return null; } }
+    }
+    /// <summary>The captured running game for live patron actions, or null.</summary>
+    internal IGame? CurrentGame
+    {
+        get { try { return ServicesOrNull?.Game.Current; } catch { return null; } }
+    }
     internal Guid? ProviderSession
     {
         get
         {
-            var session = ModApi.Current?.CurrentSession;
+            var session = ObservedSession;
             return _active && MissionApiAvailable && session?.Phase is SessionPhase.PlayerReady or SessionPhase.GameplayInitialized ? session.Id : null;
         }
     }
@@ -93,12 +142,16 @@ public class Plugin : BaseUnityPlugin
         Instance = this;
         Log = Logger;
 
-        if (!Chainloader.PluginInfos.TryGetValue(ModApi.PluginId, out var apiPlugin) || apiPlugin.Metadata.Version.Major != 0 || apiPlugin.Metadata.Version.Minor != 1 || !MissionApiAvailable)
+        ServicesOrNull = SafeServices();
+        if (!MissionApiAvailable)
         {
             enabled = false;
-            Log.LogError("Requires VGModAPI 0.1.32–0.1.x with enabled mission events ([Missions] Enabled = true); no direct mission-hook fallback.");
+            Log.LogError("Requires VGModAPI >= 0.2.8 with enabled mission events ([Missions] Enabled = true) and available session tracking; no direct mission-hook fallback.");
             return;
         }
+        var identity = AvailabilityOf(ServicesOrNull!.Missions.IdentityContinuity);
+        if (!identity.IsAvailable)
+            Log.LogWarning($"Mission identity continuity unavailable ({identity.Reason}): {identity.Detail}. Cross-save witnessed identity may fall back to session-local evidence.");
         Cfg = new AnimaConfig(Config);
 
         PlayerView      = new GamePlayerView();
@@ -107,8 +160,8 @@ public class Plugin : BaseUnityPlugin
 
         // Cross-session persistence singletons. SidecarIO takes a clock for
         // quarantine timestamps. Registry is the in-memory source of truth
-        // during a session; flushed to disk by SaveWritePatch on vanilla save,
-        // loaded by SaveLoadPatch on vanilla load.
+        // during a session; flushed to disk on witnessed vanilla save success
+        // (Lifecycle SaveSucceeded) and rehydrated by SaveLoadPatch on load.
         PersistedRegistry = new PersistedBrokerRegistry();
         Clock             = new GameClock();
         SidecarIO         = new SidecarIO(() => DateTime.UtcNow);
@@ -174,31 +227,33 @@ public class Plugin : BaseUnityPlugin
         _loadSafetyHarmony.PatchAll(typeof(MissionLookupPatch));
         _loadSafetyHarmony.PatchAll(typeof(SaveLoadPatch));
 
-        ManagedBarsSelected = ModApi.Bars != null;
+        var barsAvailability = AvailabilityOf(ServicesOrNull!.Bars);
+        _lifecycle = ServicesOrNull.Lifecycle;
+        ManagedBarsSelected = barsAvailability.IsAvailable;
+        Log.LogInfo(ManagedBarsSelected
+            ? "Bars service available: managed broker roster mode selected (API-owned presentation)."
+            : $"Bars service unavailable ({barsAvailability.Reason}): {barsAvailability.Detail} — native roster fallback mode; bars stay vanilla-owned.");
         _harmony = new Harmony(PluginGuid);
+        // Witnessed save outcomes drive the sidecar flush; subscribe before
+        // reading current session state. Events never replay.
+        _lifecycle.Changed += OnLifecycleChanged;
+
         _harmony.PatchAll(typeof(SalesmanPatches));
         _harmony.PatchAll(typeof(BarRefreshPatches));
         _harmony.PatchAll(typeof(RegistryRehydratePatches));
         _harmony.PatchAll(typeof(BarUIDebugPatches));
         _harmony.PatchAll(typeof(BarPatronImageDebugPatches));
-        _harmony.PatchAll(typeof(SaveWritePatch));
         // Harmony does not traverse nested patch classes.
         _harmony.PatchAll(typeof(BarPurchasePatches.OnButtonPurchase));
         _harmony.PatchAll(typeof(ShopPurchasePatches.OnBuyAmount));
-        _missionObserver = new MissionEventObserver(ModApi.Missions!, PersistedRegistry, error =>
+        _missionObserver = new MissionEventObserver(ServicesOrNull!.Missions, PersistedRegistry, error =>
         {
             Log.LogError("Mission provider stopped after observer failure: " + error.Message);
             StopProvider();
         }, entry => !ManagedBarsSelected || ManagedBars?.Remove(entry.Broker.Seed) == true);
         BindVisitObserver();
 
-        // Wire persistence singletons into Harmony patches (all four use the
-        // same PersistedBrokerRegistry + SidecarIO instances).
-        SaveWritePatch.Registry          = PersistedRegistry;
-        SaveWritePatch.Io                = SidecarIO;
-        SaveWritePatch.Log               = Log;
-        SaveWritePatch.CanWrite          = () => _active && MissionApiAvailable;
-
+        // Wire the persistence singleton into the roster observation patches.
         BarRefreshPatches.PersistedRegistry        = PersistedRegistry;
         RegistryRehydratePatches.PersistedRegistry = PersistedRegistry;
 
@@ -240,7 +295,7 @@ public class Plugin : BaseUnityPlugin
             Log.LogWarning("VGModAPI native travel events unavailable ([Travel] Enabled = false or unbound): system visits are not recorded and regional recognition is omitted from prompts. Existing visit history is preserved; there is no travel-hook fallback.");
             return;
         }
-        _visitObserver = SystemVisitObserver.TryBind(ModApi.Travel!, PersistedRegistry,
+        _visitObserver = SystemVisitObserver.TryBind(ServicesOrNull!.Travel, PersistedRegistry,
             failed: error =>
             {
                 Log.LogError("System-visit recording stopped after travel observer failure; recorded history is preserved and regional recognition is omitted: " + error.Message);
@@ -268,7 +323,7 @@ public class Plugin : BaseUnityPlugin
     {
         // Chainloader authenticates the instance only after Awake has returned.
         if (!_active || !ManagedBarsSelected) return;
-        try { ManagedBars = new ManagedBrokerRosters(ModApi.Bars ?? throw new InvalidOperationException("Bar service disappeared after startup selection."), this); }
+        try { ManagedBars = new ManagedBrokerRosters(ServicesOrNull?.Bars ?? throw new InvalidOperationException("Bar service disappeared after startup selection."), this); }
         catch (Exception error) { Log.LogError("Managed bar provider unavailable: " + error); StopProvider(); }
     }
 
@@ -278,6 +333,8 @@ public class Plugin : BaseUnityPlugin
         _nextCapabilityCheck = Time.unscaledTime + 1f;
         try { ManagedBars?.ReconcileRetirements(this); }
         catch (Exception error) { Log.LogError("Managed broker retirement retry failed: " + error); }
+        try { ManagedBars?.DrainPending(this); }
+        catch (Exception error) { Log.LogError("Managed roster drain failed: " + error); }
         // Losing the optional travel capability degrades only visit recording;
         // mission authoring and the load safeguards are independent of it.
         if (_visitObserver != null && !TravelApiAvailable)
@@ -290,14 +347,53 @@ public class Plugin : BaseUnityPlugin
         Log.LogError("Mission API unavailable; provider stopped until restart. Load safeguards remain active.");
     }
 
-    private void OnAppQuitting()
+    /// <summary>Witnessed lifecycle facts drive provider work:
+    /// PlayerReady pre-declares restored managed contacts before the first
+    /// bar refresh, and the sidecar publishes only on a witnessed
+    /// <see cref="LifecycleEventKind.SaveSucceeded"/> against its actual
+    /// destination (skipped/failed saves never publish — the retired
+    /// SaveWritePatch postfix could not tell the difference).</summary>
+    private void OnLifecycleChanged(LifecycleEvent e)
     {
-        if (!_active || !MissionApiAvailable) return;
-        var path = SaveLoadPatch.LastKnownSavePath ?? SaveWritePatch.LastKnownSavePath;
-        if (path is null) return;
+        if (e == null) return;
         try
         {
-            var sidecarPath = SidecarPathResolver.From(path);
+            switch (e.Kind)
+            {
+                case LifecycleEventKind.SessionStarting:
+                    // The remembered save destination belongs to the replaced attempt.
+                    _lastSaveDestination = null;
+                    break;
+                case LifecycleEventKind.PlayerReady:
+                    if (_active && ManagedBarsSelected)
+                        ManagedBars?.RegisterRestoredDefinitions(this);
+                    break;
+                case LifecycleEventKind.SaveSucceeded:
+                    if (!_active || !MissionApiAvailable) return;
+                    if (e.Destination is null)
+                    {
+                        Log.LogWarning("SaveSucceeded without a destination; sidecar not flushed.");
+                        return;
+                    }
+                    TryFlushSidecar(e.Destination, "SaveSucceeded");
+                    break;
+                // SaveStarted/SaveSkipped/SaveFailed publish nothing; failures
+                // keep prior sidecar bytes intact (best-effort semantics).
+            }
+        }
+        catch (Exception error)
+        {
+            Log.LogError($"Lifecycle handler failed for {e.Kind}: {error}");
+        }
+    }
+
+    /// <summary>Atomic sidecar write (tmp + rename inside <see cref="SidecarIO"/>).
+    /// Persistence failures are logged and never poison vanilla.</summary>
+    private bool TryFlushSidecar(string savePath, string reason)
+    {
+        try
+        {
+            var sidecarPath = SidecarPathResolver.From(savePath);
             var entries = System.Linq.Enumerable.ToArray(PersistedRegistry.All());
             var visited = System.Linq.Enumerable.ToArray(PersistedRegistry.VisitedSystems.Values);
             SidecarIO.Write(sidecarPath, new SidecarSchema(
@@ -305,9 +401,26 @@ public class Plugin : BaseUnityPlugin
                 Entries:        entries,
                 VisitedSystems: visited.Length == 0 ? null : visited,
                 BarReservations: PersistedRegistry.BarReservations.Count == 0 ? null : System.Linq.Enumerable.ToArray(PersistedRegistry.BarReservations)));
-            Log.LogInfo($"ApplicationQuit: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {visited.Length} visited to {sidecarPath}");
+            _lastSaveDestination = savePath;
+            Log.LogInfo($"{reason}: flushed {entries.Length} entr{(entries.Length == 1 ? "y" : "ies")} + {visited.Length} visited to {sidecarPath}");
+            return true;
         }
-        catch (Exception e) { Log.LogError($"Quit-time flush failed: {e}"); }
+        catch (Exception e)
+        {
+            Log.LogError($"Sidecar flush for `{savePath}` failed ({reason}): {e}");
+            return false;
+        }
+    }
+
+    private void OnAppQuitting()
+    {
+        if (!_active || !MissionApiAvailable) return;
+        var path = SaveLoadPatch.LastKnownSavePath ?? _lastSaveDestination;
+        if (path is null) return;
+        // ApplicationQuit safety net: flush the most recently active slot even
+        // if the player never saved this session (mirrors the loaded-slot
+        // latch semantics of the retired postfix flush).
+        TryFlushSidecar(path, "ApplicationQuit");
     }
 
     private void OnDestroy()
@@ -322,7 +435,8 @@ public class Plugin : BaseUnityPlugin
     {
         if (_stopped) return;
         _stopped = true; _active = false; enabled = false;
-        SaveWritePatch.Registry = null;
+        try { if (_lifecycle != null) _lifecycle.Changed -= OnLifecycleChanged; } catch { }
+        _lifecycle = null;
         Application.quitting -= OnAppQuitting;
         Cleanup(() => ManagedBars?.Dispose());
         Cleanup(() => _missionObserver?.Dispose());
