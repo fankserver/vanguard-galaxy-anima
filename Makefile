@@ -10,9 +10,9 @@ GAME_DIR ?= /mnt/c/Program Files (x86)/Steam/steamapps/common/Vanguard Galaxy
 PLUGIN_DIR := $(GAME_DIR)/BepInEx/plugins
 VGANIMA_DIR := $(PLUGIN_DIR)/VGAnima
 
-# Owner-local reference for inspected game 0.8.2.3. Never distribute game DLLs.
+# Owner-local reference for inspected game 0.8.2.4. Never distribute game DLLs.
 PUBLICIZER ?= assembly-publicizer
-GAME_ASSEMBLY_SHA256 := a2aad60bc68c31baccd636587d3c5ba4e651eacda59b0af42cd4f17f864284fb
+GAME_ASSEMBLY_SHA256 := 71636b8fcfde62e2e00ab64c417e878d1a24d433f1bac10e1ddc8750193a35c2
 
 # Path to the sibling VGMissionJournal checkout — we reference its released DLL
 # as a typed soft-dep (runtime load is handled by BepInEx independently).
