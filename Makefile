@@ -10,7 +10,7 @@ GAME_DIR ?= /mnt/c/Program Files (x86)/Steam/steamapps/common/Vanguard Galaxy
 PLUGIN_DIR := $(GAME_DIR)/BepInEx/plugins
 VGANIMA_DIR := $(PLUGIN_DIR)/VGAnima
 
-# Owner-local reference for inspected game 0.8.2.3. Never distribute game DLLs.
+# Owner-local reference for inspected game 0.8.2.4. Never distribute game DLLs.
 PUBLICIZER ?= assembly-publicizer
 GAME_ASSEMBLY_SHA256 := 71636b8fcfde62e2e00ab64c417e878d1a24d433f1bac10e1ddc8750193a35c2
 
