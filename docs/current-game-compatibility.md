@@ -1,6 +1,6 @@
 # Current compilation reference
 
-The current compatibility target is Vanguard Galaxy **0.8.2.3**, original `Assembly-CSharp.dll` SHA-256 `a2aad60bc68c31baccd636587d3c5ba4e651eacda59b0af42cd4f17f864284fb`.
+The current compatibility target is Vanguard Galaxy **0.8.2.4**, original `Assembly-CSharp.dll` SHA-256 `71636b8fcfde62e2e00ab64c417e878d1a24d433f1bac10e1ddc8750193a35c2`.
 
 Run `make refresh-asm` with the owner-installed game and `assembly-publicizer`. This generates a stripped, publicized compile reference in ignored `.local-reference/`. Build/test validate the pinned source receipt and generated-reference checksum, then refresh the `lib/` symlink. If the installed original is present, its hash is checked too. A valid previously generated private reference can be reused without a game installation; it is still never published in the repository. Set `GAME_DIR` to your installation path when generating references or checking a local install. No game DLL or private receipt is distributed. A game update requires reinspection, not copying an old sibling stub. In an isolated worktree, set `VGMISSIONJOURNAL_DLL` to the current sibling Release DLL path.
 
